@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Print matching PDF pages</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #eef1f5;
+      color: #172033;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+    }
+
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 12px;
+      background: #fff;
+      border-bottom: 1px solid #d9dee8;
+    }
+
+    button, a {
+      min-height: 40px;
+      padding: 9px 14px;
+      border: 0;
+      border-radius: 8px;
+      background: #3157d5;
+      color: #fff;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .page {
+      display: block;
+      width: min(var(--page-width), calc(100vw - 32px));
+      height: auto;
+      margin: 24px auto;
+      background: #fff;
+      box-shadow: 0 8px 28px rgba(23, 32, 51, 0.14);
+    }
+
+    @media print {
+      .toolbar { display: none; }
+      body { background: #fff; }
+      .page {
+        width: var(--page-width);
+        height: var(--page-height);
+        margin: 0;
+        box-shadow: none;
+        break-after: page;
+        page-break-after: always;
+      }
+      .page:last-child {
+        break-after: auto;
+        page-break-after: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button type="button" onclick="window.print()">
+      Print {{ pages|length }} matching {{ "page" if pages|length == 1 else "pages" }}
+    </button>
+    <a href="{{ url_for('print_page_pdf', token=token) }}" target="_blank" rel="noopener">
+      Open extracted PDF
+    </a>
+  </div>
+  {% for page in pages %}
+    <img
+      class="page"
+      style="--page-width: {{ page.width_pt }}pt; --page-height: {{ page.height_pt }}pt"
+      src="{{ page.image_url }}"
+      alt="Original PDF page {{ page.source_page_number }}"
+      {% if loop.last %}onload="window.print()"{% endif %}
+    >
+  {% endfor %}
+</body>
+</html>
