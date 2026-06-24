@@ -136,11 +136,15 @@ def lookup_part_codes(
         -> sale.order.line.product_template_id (within the requested SO)
     """
     normalized_so = so_number.strip()
-    normalized_codes = [code.strip().upper() for code in sm_codes]
+    normalized_codes = [
+        code.strip().upper() for code in sm_codes if code.strip()
+    ]
     if not normalized_so:
         raise ValueError("SO number is required.")
-    if len(normalized_codes) != 2 or any(not code for code in normalized_codes):
-        raise ValueError("Exactly two product codes are required.")
+    if not normalized_codes:
+        raise ValueError("Enter at least one product code.")
+    if len(normalized_codes) > 2:
+        raise ValueError("A maximum of two product codes is allowed.")
 
     if execute is None:
         execute, _ = _connect()

@@ -3,7 +3,7 @@
 A small Flask application that accepts:
 
 - one sale order number (`sale.order.name`)
-- two component/product codes (`product.product.default_code`), with no format restriction
+- one or two component/product codes (`product.product.default_code`), with no format restriction
 - one PDF document to search for the resulting part code
 
 For each SM code, it follows:

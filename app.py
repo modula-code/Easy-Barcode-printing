@@ -60,17 +60,27 @@ def lookup():
 
     supplied_codes = payload.get("sm_codes")
     if isinstance(supplied_codes, list):
-        sm_codes = [str(code).strip().upper() for code in supplied_codes]
+        sm_codes = [
+            str(code).strip().upper()
+            for code in supplied_codes
+            if str(code).strip()
+        ]
     else:
         sm_codes = [
-            str(payload.get("code1", "")).strip().upper(),
-            str(payload.get("code2", "")).strip().upper(),
+            code
+            for code in (
+                str(payload.get("code1", "")).strip().upper(),
+                str(payload.get("code2", "")).strip().upper(),
+            )
+            if code
         ]
 
     if not so_number:
         return jsonify(error="SO number is required."), 400
-    if len(sm_codes) != 2 or any(not code for code in sm_codes):
-        return jsonify(error="Exactly two product codes are required."), 400
+    if not sm_codes:
+        return jsonify(error="Enter at least one product code."), 400
+    if len(sm_codes) > 2:
+        return jsonify(error="A maximum of two product codes is allowed."), 400
 
     try:
         result = lookup_part_codes(so_number, sm_codes)
