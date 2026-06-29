@@ -20,6 +20,7 @@ load_dotenv()
 from odoo_client import (  # noqa: E402
     OdooConfigurationError,
     OdooLookupError,
+    get_partner_ref,
     lookup_part_codes,
 )
 from pdf_service import (  # noqa: E402
@@ -44,10 +45,32 @@ def health():
     return jsonify(status="ok")
 
 
+@app.get("/api/partner-ref")
+def partner_ref():
+    po_number = str(request.args.get("po_number", "")).strip()
+    if not po_number:
+        return jsonify(error="PO number is required."), 400
+
+    try:
+        result = get_partner_ref(po_number)
+    except OdooLookupError as exc:
+        return jsonify(error=str(exc)), 404
+    except OdooConfigurationError as exc:
+        return jsonify(error=str(exc)), 500
+    except (xmlrpc.client.Error, OSError, TimeoutError) as exc:
+        app.logger.exception("Odoo request failed")
+        return jsonify(error=f"Could not query Odoo: {exc}"), 502
+    except Exception:
+        app.logger.exception("Unexpected partner_ref lookup failure")
+        return jsonify(error="The lookup failed unexpectedly."), 500
+
+    return jsonify(result)
+
+
 @app.post("/api/lookup")
 def lookup():
     payload = request.get_json(silent=True) or request.form
-    so_number = str(payload.get("so_number", "")).strip()
+    po_number = str(payload.get("po_number", "")).strip()
     document = request.files.get("document")
     document_bytes = None
 
@@ -75,15 +98,15 @@ def lookup():
             if code
         ]
 
-    if not so_number:
-        return jsonify(error="SO number is required."), 400
+    if not po_number:
+        return jsonify(error="PO number is required."), 400
     if not sm_codes:
         return jsonify(error="Enter at least one product code."), 400
     if len(sm_codes) > 2:
         return jsonify(error="A maximum of two product codes is allowed."), 400
 
     try:
-        result = lookup_part_codes(so_number, sm_codes)
+        result = lookup_part_codes(po_number, sm_codes)
     except OdooLookupError as exc:
         return jsonify(error=str(exc)), 404
     except OdooConfigurationError as exc:

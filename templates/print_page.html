@@ -5,12 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Print matching PDF pages</title>
   <style>
+    :root {
+      --ink: #4f372f;
+      --accent: #6b4b41;
+      --line: #d8c8c1;
+      --page: #f1e6dd;
+      --surface: #fffdfb;
+    }
+
     * { box-sizing: border-box; }
 
     body {
       margin: 0;
-      background: #eef1f5;
-      color: #172033;
+      background: var(--page);
+      color: var(--ink);
       font-family: ui-sans-serif, system-ui, sans-serif;
     }
 
@@ -19,12 +27,19 @@
       top: 0;
       z-index: 1;
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       justify-content: center;
       gap: 12px;
       padding: 12px;
-      background: #fff;
-      border-bottom: 1px solid #d9dee8;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .toolbar-logo {
+      width: 148px;
+      height: auto;
+      margin-right: 8px;
     }
 
     button, a {
@@ -32,7 +47,7 @@
       padding: 9px 14px;
       border: 0;
       border-radius: 8px;
-      background: #3157d5;
+      background: var(--ink);
       color: #fff;
       cursor: pointer;
       font: inherit;
@@ -40,13 +55,24 @@
       text-decoration: none;
     }
 
+    button:hover, a:hover {
+      background: var(--accent);
+    }
+
     .page {
       display: block;
       width: min(var(--page-width), calc(100vw - 32px));
       height: auto;
       margin: 24px auto;
-      background: #fff;
-      box-shadow: 0 8px 28px rgba(23, 32, 51, 0.14);
+      background: var(--surface);
+      box-shadow: 0 8px 28px rgba(79, 55, 47, 0.18);
+    }
+
+    @media (max-width: 620px) {
+      .toolbar-logo {
+        width: min(190px, 100%);
+        margin: 0 100%;
+      }
     }
 
     @media print {
@@ -69,6 +95,11 @@
 </head>
 <body>
   <div class="toolbar">
+    <img
+      class="toolbar-logo"
+      src="{{ url_for('static', filename='logo.svg') }}"
+      alt="Modula SW Enterprise"
+    >
     <button type="button" onclick="window.print()">
       Print {{ pages|length }} matching {{ "page" if pages|length == 1 else "pages" }}
     </button>

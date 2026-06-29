@@ -120,27 +120,61 @@ def _many2one_name(value: Any) -> str:
     return ""
 
 
+def get_partner_ref(
+    po_number: str,
+    *,
+    execute: Execute | None = None,
+) -> dict[str, Any]:
+    """Look up purchase.order.partner_ref for a given purchase.order.name."""
+    normalized_po = po_number.strip()
+    if not normalized_po:
+        raise ValueError("PO number is required.")
+
+    if execute is None:
+        execute, _ = _connect()
+
+    orders = _search_read(
+        execute,
+        "purchase.order",
+        [("name", "=", normalized_po)],
+        ["id", "name", "partner_ref"],
+        limit=1,
+    )
+    if not orders:
+        raise OdooLookupError(
+            f"Purchase order '{normalized_po}' was not found."
+        )
+
+    order = orders[0]
+    return {
+        "po_number": order.get("name") or normalized_po,
+        "purchase_order_id": order["id"],
+        "partner_ref": order.get("partner_ref"),
+    }
+
+
 def lookup_part_codes(
-    so_number: str,
+    po_number: str,
     sm_codes: list[str],
     *,
     execute: Execute | None = None,
 ) -> dict[str, Any]:
     """
-    Resolve each component product to finished products present on a sale order.
+    Resolve each component product to finished products present on a purchase order.
 
     Relationship:
       mrp.bom.line.product_id (SM code)
         -> mrp.bom.line.bom_id
         -> mrp.bom.product_tmpl_id (finished product)
-        -> sale.order.line.product_template_id (within the requested SO)
+        -> purchase.order.line.product_id.product_tmpl_id
+           (within the requested PO)
     """
-    normalized_so = so_number.strip()
+    normalized_po = po_number.strip()
     normalized_codes = [
         code.strip().upper() for code in sm_codes if code.strip()
     ]
-    if not normalized_so:
-        raise ValueError("SO number is required.")
+    if not normalized_po:
+        raise ValueError("PO number is required.")
     if not normalized_codes:
         raise ValueError("Enter at least one product code.")
     if len(normalized_codes) > 2:
@@ -151,16 +185,19 @@ def lookup_part_codes(
 
     orders = _search_read(
         execute,
-        "sale.order",
-        [("name", "=", normalized_so)],
-        ["id", "name"],
+        "purchase.order",
+        [("name", "=", normalized_po)],
+        ["id", "name", "partner_ref"],
         limit=1,
     )
     if not orders:
-        raise OdooLookupError(f"Sale order '{normalized_so}' was not found.")
+        raise OdooLookupError(
+            f"Purchase order '{normalized_po}' was not found."
+        )
 
     order = orders[0]
     order_id = order["id"]
+    print(f"[lookup] PO {order.get('name')} partner_ref={order.get('partner_ref')!r}")
     unique_codes = list(dict.fromkeys(normalized_codes))
 
     product_code_by_id: dict[int, str] = {}
@@ -234,26 +271,54 @@ def lookup_part_codes(
             for template_id in template_ids
         }
     )
-    sale_lines = (
+    purchase_lines = (
         _search_read(
             execute,
-            "sale.order.line",
+            "purchase.order.line",
             [
                 ("order_id", "=", order_id),
-                ("product_template_id", "in", candidate_template_ids),
+                (
+                    "product_id.product_tmpl_id",
+                    "in",
+                    candidate_template_ids,
+                ),
             ],
-            ["id", "product_template_id"],
+            ["id", "product_id"],
         )
         if candidate_template_ids
         else []
     )
 
+    purchase_product_ids = sorted(
+        {
+            product_id
+            for line in purchase_lines
+            if (
+                product_id := _many2one_id(line.get("product_id"))
+            )
+            is not None
+        }
+    )
+    purchase_products = (
+        _search_read(
+            execute,
+            "product.product",
+            [("id", "in", purchase_product_ids)],
+            ["id", "product_tmpl_id", "name", "default_code"],
+        )
+        if purchase_product_ids
+        else []
+    )
+    purchase_product_by_id = {
+        product["id"]: product for product in purchase_products
+    }
+
     matched_template_ids = sorted(
         {
             template_id
-            for line in sale_lines
+            for product in purchase_products
             if (
-                template_id := _many2one_id(line.get("product_template_id"))
+                template_id := _many2one_id(product.get("product_tmpl_id"))
             )
             is not None
         }
@@ -270,29 +335,40 @@ def lookup_part_codes(
     )
     template_by_id = {template["id"]: template for template in templates}
 
-    sale_lines_by_template: dict[int, list[dict[str, Any]]] = {}
-    for line in sale_lines:
-        template_id = _many2one_id(line.get("product_template_id"))
+    purchase_lines_by_template: dict[int, list[dict[str, Any]]] = {}
+    for line in purchase_lines:
+        product_id = _many2one_id(line.get("product_id"))
+        product = purchase_product_by_id.get(product_id, {})
+        template_id = _many2one_id(product.get("product_tmpl_id"))
         if template_id is not None:
-            sale_lines_by_template.setdefault(template_id, []).append(line)
+            purchase_lines_by_template.setdefault(template_id, []).append(
+                line
+            )
 
     results = []
     for code in normalized_codes:
         candidate_ids = template_ids_by_code.get(code, set())
         matches = []
         for template_id in sorted(candidate_ids):
-            for sale_line in sale_lines_by_template.get(template_id, []):
+            for purchase_line in purchase_lines_by_template.get(
+                template_id, []
+            ):
+                product_id = _many2one_id(purchase_line.get("product_id"))
+                product = purchase_product_by_id.get(product_id, {})
                 relation_name = _many2one_name(
-                    sale_line.get("product_template_id")
+                    purchase_line.get("product_id")
                 )
                 template = template_by_id.get(template_id, {})
                 matches.append(
                     {
-                        "part_code": template.get("default_code") or relation_name,
+                        "part_code": product.get("default_code")
+                        or template.get("default_code")
+                        or relation_name,
                         "product_template_id": template_id,
                         "product_template_name": template.get("name")
+                        or product.get("name")
                         or relation_name,
-                        "sale_order_line_id": sale_line["id"],
+                        "purchase_order_line_id": purchase_line["id"],
                     }
                 )
 
@@ -303,7 +379,7 @@ def lookup_part_codes(
         elif not matches:
             error = (
                 f"Component '{code}' is used in BOMs, but none of their finished "
-                f"products are present in sale order '{normalized_so}'."
+                f"products are present in purchase order '{normalized_po}'."
             )
         else:
             error = None
@@ -315,7 +391,7 @@ def lookup_part_codes(
         for match in item["matches"]:
             key = (
                 match["product_template_id"],
-                match["sale_order_line_id"],
+                match["purchase_order_line_id"],
             )
             consolidated = consolidated_by_line.setdefault(
                 key,
@@ -325,8 +401,9 @@ def lookup_part_codes(
                 consolidated["sm_codes"].append(item["sm_code"])
 
     return {
-        "so_number": order.get("name") or normalized_so,
-        "sale_order_id": order_id,
+        "po_number": order.get("name") or normalized_po,
+        "purchase_order_id": order_id,
+        "partner_ref": order.get("partner_ref"),
         "results": results,
         "matches": list(consolidated_by_line.values()),
     }

@@ -3,21 +3,23 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Easy Label Printing</title>
+        <title>Easy Barcode Printing</title>
         <style>
             :root {
                 color-scheme: light;
-                --ink: #172033;
-                --muted: #667085;
-                --line: #d9dee8;
-                --surface: #ffffff;
-                --page: #f4f6fa;
-                --primary: #3157d5;
-                --primary-hover: #2546b7;
-                --success-bg: #eefbf3;
-                --success-line: #9ddab4;
+                --ink: #4f372f;
+                --muted: #6b4b41;
+                --line: #d8c8c1;
+                --surface: #fffdfb;
+                --page: #f1e6dd;
+                --primary: #4f372f;
+                --primary-hover: #6b4b41;
+                --accent: #6b4b41;
+                --soft-accent: #f3e9e4;
+                --success-bg: #f7efeb;
+                --success-line: #cfb9af;
                 --error-bg: #fff1f1;
-                --error-line: #efaaaa;
+                --error-line: #dba6a6;
             }
 
             * {
@@ -48,18 +50,35 @@
                 background: var(--surface);
                 border: 1px solid var(--line);
                 border-radius: 16px;
-                box-shadow: 0 12px 36px rgba(22, 32, 51, 0.08);
+                box-shadow: 0 16px 42px rgba(79, 55, 47, 0.14);
                 padding: clamp(24px, 5vw, 40px);
+            }
+
+            .brand {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 24px;
+                margin-bottom: 18px;
+                padding-bottom: 22px;
+                border-bottom: 1px solid var(--line);
+            }
+
+            .brand-logo {
+                display: block;
+                width: min(270px, 48%);
+                height: auto;
             }
 
             h1 {
                 margin: 0;
                 font-size: clamp(1.65rem, 4vw, 2.25rem);
                 letter-spacing: -0.035em;
+                color: var(--ink);
             }
 
             .intro {
-                margin: 10px 0 30px;
+                margin: 0 0 30px;
                 color: var(--muted);
                 line-height: 1.55;
             }
@@ -89,7 +108,7 @@
                 border: 1px solid var(--line);
                 border-radius: 9px;
                 color: var(--ink);
-                background: #fff;
+                background: var(--surface);
                 font: inherit;
                 transition:
                     border-color 120ms ease,
@@ -110,7 +129,7 @@
                 padding: 7px 11px;
                 border: 1px solid var(--line);
                 border-radius: 7px;
-                background: #f8f9fc;
+                background: var(--soft-accent);
                 color: var(--ink);
                 cursor: pointer;
                 font: inherit;
@@ -120,7 +139,7 @@
             input:focus {
                 outline: none;
                 border-color: var(--primary);
-                box-shadow: 0 0 0 3px rgba(49, 87, 213, 0.14);
+                box-shadow: 0 0 0 3px rgba(107, 75, 65, 0.18);
             }
 
             .hint {
@@ -185,7 +204,7 @@
                 gap: 12px;
                 padding: 12px 15px;
                 border-bottom: 1px solid var(--line);
-                background: #f8f9fc;
+                background: var(--soft-accent);
             }
 
             .result-heading strong {
@@ -195,8 +214,8 @@
             .badge {
                 border-radius: 999px;
                 padding: 4px 9px;
-                background: #e8edff;
-                color: #2949b0;
+                background: var(--accent);
+                color: #fff;
                 font-size: 0.75rem;
                 font-weight: 750;
             }
@@ -237,7 +256,7 @@
             .document-status {
                 padding: 12px 15px;
                 border-top: 1px solid var(--success-line);
-                background: #fff;
+                background: var(--surface);
                 color: var(--muted);
                 font-size: 0.86rem;
             }
@@ -262,11 +281,11 @@
 
             .secondary-print-link {
                 margin-left: 8px;
-                background: #475467;
+                background: var(--accent);
             }
 
             .secondary-print-link:hover {
-                background: #344054;
+                background: var(--primary);
             }
 
             [hidden] {
@@ -285,33 +304,51 @@
                 .field.full-width {
                     grid-column: auto;
                 }
+                .brand {
+                    align-items: flex-start;
+                    flex-direction: column;
+                }
+                .brand-logo {
+                    width: min(280px, 100%);
+                }
             }
         </style>
     </head>
     <body>
         <main>
             <section class="panel">
-                <h1>Easy Barcode Scanning</h1>
+                <header class="brand">
+                    <img
+                        class="brand-logo"
+                        src="{{ url_for('static', filename='logo.svg') }}"
+                        alt="Modula SW Enterprise"
+                    />
+                    <h1>Easy Barcode Printing</h1>
+                </header>
                 <p class="intro">
-                    Enter one sale order and one or two component product codes.
+                    Enter one purchase order and one or two component product codes.
                     The lookup finds the finished BOM products that are present
-                    as lines on that sale order.
+                    as lines on that purchase order.
                 </p>
 
                 <form id="lookup-form">
                     <div class="form-grid">
                         <div class="field">
-                            <label for="so-number">Sale order number</label>
+                            <label for="po-number">Purchase order number</label>
                             <input
-                                id="so-number"
-                                name="so_number"
+                                id="po-number"
+                                name="po_number"
                                 type="text"
-                                placeholder="S01148"
+                                placeholder="P00001"
                                 autocomplete="off"
                                 required
                             />
+                            <button id="check-po-button" type="button">
+                                Check partner_ref
+                            </button>
+                            <span id="po-check-result" class="hint" hidden></span>
                             <span class="hint"
-                                >Matches sale.order.name exactly.</span
+                                >Matches purchase.order.name exactly.</span
                             >
                         </div>
 
@@ -374,6 +411,38 @@
             const button = document.querySelector("#submit-button");
             const message = document.querySelector("#message");
             const results = document.querySelector("#results");
+            const checkPoButton = document.querySelector("#check-po-button");
+            const poCheckResult = document.querySelector("#po-check-result");
+
+            checkPoButton.addEventListener("click", async () => {
+                const poNumber = document
+                    .querySelector("#po-number")
+                    .value.trim()
+                    .toUpperCase();
+                if (!poNumber) {
+                    poCheckResult.hidden = false;
+                    poCheckResult.textContent = "Enter a PO number first.";
+                    return;
+                }
+
+                checkPoButton.disabled = true;
+                poCheckResult.hidden = false;
+                poCheckResult.textContent = "Checking…";
+                try {
+                    const response = await fetch(
+                        `/api/partner-ref?po_number=${encodeURIComponent(poNumber)}`,
+                    );
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error || "Lookup failed.");
+                    }
+                    poCheckResult.textContent = `partner_ref: ${data.partner_ref ?? "(empty)"}`;
+                } catch (error) {
+                    poCheckResult.textContent = error.message || "Lookup failed.";
+                } finally {
+                    checkPoButton.disabled = false;
+                }
+            });
 
             function clearOutput() {
                 message.hidden = true;
@@ -416,7 +485,7 @@
                         document.createTextNode(match.product_template_name),
                         document.createElement("br"),
                         document.createTextNode(
-                            `Product template ID: ${match.product_template_id} · Sale line ID: ${match.sale_order_line_id}`,
+                            `Product template ID: ${match.product_template_id} · Purchase line ID: ${match.purchase_order_line_id}`,
                         ),
                     );
                     row.appendChild(metadata);
@@ -504,8 +573,8 @@
                 button.disabled = true;
                 button.textContent = "Looking up…";
                 formData.set(
-                    "so_number",
-                    formData.get("so_number").trim().toUpperCase(),
+                    "po_number",
+                    formData.get("po_number").trim().toUpperCase(),
                 );
                 formData.set("code1", code1);
                 formData.set("code2", code2);

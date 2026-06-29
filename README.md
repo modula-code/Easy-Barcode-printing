@@ -2,7 +2,7 @@
 
 A small Flask application that accepts:
 
-- one sale order number (`sale.order.name`)
+- one purchase order number (`purchase.order.name`)
 - one or two component/product codes (`product.product.default_code`), with no format restriction
 - one PDF document to search for the resulting part code
 
@@ -10,12 +10,13 @@ For each SM code, it follows:
 
 `mrp.bom.line.product_id → mrp.bom.line.bom_id → mrp.bom.product_tmpl_id`
 
-It then returns the matching `sale.order.line.product_template_id` records from
-the requested sale order.
+It then returns purchase-order lines whose
+`purchase.order.line.product_id.product_tmpl_id` matches the finished BOM
+product template.
 
 Results are consolidated by the pair
-`(product_template_id, sale_order_line_id)`. If both SM codes resolve to the
-same pair, the UI displays one entry and associates both SM codes with it.
+`(product_template_id, purchase_order_line_id)`. If both SM codes resolve to
+the same pair, the UI displays one entry and associates both SM codes with it.
 
 For each consolidated result, the app searches the uploaded PDF and reports
 the total number of text occurrences and all matching page numbers. It can
@@ -78,10 +79,10 @@ memory. The supplied configuration uses one worker and four threads.
 
 ```json
 {
-  "so_number": "S01148",
+  "po_number": "P00001",
   "sm_codes": ["SM-1234", "SM-5678"]
 }
 ```
 
-The Odoo user must have read access to `sale.order`, `sale.order.line`,
+The Odoo user must have read access to `purchase.order`, `purchase.order.line`,
 `mrp.bom`, `mrp.bom.line`, `product.product`, and `product.template`.
