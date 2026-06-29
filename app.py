@@ -137,10 +137,26 @@ def lookup():
                     "page_numbers": [],
                     "occurrence_count": 0,
                     "matching_page_count": 0,
+                    "page_matches": [],
                     "first_token": None,
                     "all_token": None,
                 },
             ).copy()
+            page_matches = []
+            for page_match in document_match.get("page_matches", []):
+                page_match = page_match.copy()
+                page_token = page_match.pop("token", None)
+                if page_token:
+                    page_match["print_url"] = url_for(
+                        "print_page",
+                        token=page_token,
+                    )
+                    page_match["pdf_url"] = url_for(
+                        "print_page_pdf",
+                        token=page_token,
+                    )
+                page_matches.append(page_match)
+            document_match["page_matches"] = page_matches
             first_token = document_match.pop("first_token", None)
             all_token = document_match.pop("all_token", None)
             if first_token:

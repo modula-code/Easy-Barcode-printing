@@ -14,15 +14,15 @@ It then returns purchase-order lines whose
 `purchase.order.line.product_id.product_tmpl_id` matches the finished BOM
 product template.
 
-Results are consolidated by the pair
-`(product_template_id, purchase_order_line_id)`. If both SM codes resolve to
-the same pair, the UI displays one entry and associates both SM codes with it.
+Results are consolidated by `product_template_id`. If multiple purchase order
+lines or both SM codes resolve to the same product template, the UI displays one
+entry and keeps the underlying purchase line IDs as supporting detail.
 
-For each consolidated result, the app searches the uploaded PDF and reports
-the total number of text occurrences and all matching page numbers. It can
-print either the first matching page or all unique matching pages. If the code
-appears multiple times on one page, that page is printed once. Text-based PDFs
-are supported; scanned PDFs require OCR before upload.
+For each consolidated result, the app searches the uploaded PDF and reports all
+matching label page numbers. It can print either the first matching label page
+or all unique matching label pages. If the code appears multiple times on one
+label page, that page is printed once. Text-based PDFs are supported; scanned
+PDFs require OCR before upload.
 
 ## Setup
 

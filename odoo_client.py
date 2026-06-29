@@ -350,27 +350,33 @@ def lookup_part_codes(
         candidate_ids = template_ids_by_code.get(code, set())
         matches = []
         for template_id in sorted(candidate_ids):
-            for purchase_line in purchase_lines_by_template.get(
-                template_id, []
-            ):
-                product_id = _many2one_id(purchase_line.get("product_id"))
-                product = purchase_product_by_id.get(product_id, {})
-                relation_name = _many2one_name(
-                    purchase_line.get("product_id")
-                )
-                template = template_by_id.get(template_id, {})
-                matches.append(
-                    {
-                        "part_code": product.get("default_code")
-                        or template.get("default_code")
-                        or relation_name,
-                        "product_template_id": template_id,
-                        "product_template_name": template.get("name")
-                        or product.get("name")
-                        or relation_name,
-                        "purchase_order_line_id": purchase_line["id"],
-                    }
-                )
+            template_purchase_lines = sorted(
+                purchase_lines_by_template.get(template_id, []),
+                key=lambda line: int(line["id"]),
+            )
+            if not template_purchase_lines:
+                continue
+
+            primary_line = template_purchase_lines[0]
+            product_id = _many2one_id(primary_line.get("product_id"))
+            product = purchase_product_by_id.get(product_id, {})
+            relation_name = _many2one_name(primary_line.get("product_id"))
+            template = template_by_id.get(template_id, {})
+            purchase_line_ids = [line["id"] for line in template_purchase_lines]
+            matches.append(
+                {
+                    "part_code": product.get("default_code")
+                    or template.get("default_code")
+                    or relation_name,
+                    "product_template_id": template_id,
+                    "product_template_name": template.get("name")
+                    or product.get("name")
+                    or relation_name,
+                    "purchase_order_line_id": primary_line["id"],
+                    "purchase_order_line_ids": purchase_line_ids,
+                    "purchase_order_line_count": len(purchase_line_ids),
+                }
+            )
 
         if not product_ids_by_code.get(code):
             error = f"Product '{code}' was not found in Odoo."
@@ -386,16 +392,31 @@ def lookup_part_codes(
 
         results.append({"sm_code": code, "matches": matches, "error": error})
 
-    consolidated_by_line: dict[tuple[int, int], dict[str, Any]] = {}
+    consolidated_by_template: dict[int, dict[str, Any]] = {}
     for item in results:
         for match in item["matches"]:
-            key = (
-                match["product_template_id"],
-                match["purchase_order_line_id"],
-            )
-            consolidated = consolidated_by_line.setdefault(
+            key = match["product_template_id"]
+            consolidated = consolidated_by_template.setdefault(
                 key,
-                {**match, "sm_codes": []},
+                {
+                    **match,
+                    "purchase_order_line_ids": list(
+                        match.get(
+                            "purchase_order_line_ids",
+                            [match["purchase_order_line_id"]],
+                        )
+                    ),
+                    "sm_codes": [],
+                },
+            )
+            for line_id in match.get(
+                "purchase_order_line_ids",
+                [match["purchase_order_line_id"]],
+            ):
+                if line_id not in consolidated["purchase_order_line_ids"]:
+                    consolidated["purchase_order_line_ids"].append(line_id)
+            consolidated["purchase_order_line_count"] = len(
+                consolidated["purchase_order_line_ids"]
             )
             if item["sm_code"] not in consolidated["sm_codes"]:
                 consolidated["sm_codes"].append(item["sm_code"])
@@ -405,5 +426,5 @@ def lookup_part_codes(
         "purchase_order_id": order_id,
         "partner_ref": order.get("partner_ref"),
         "results": results,
-        "matches": list(consolidated_by_line.values()),
+        "matches": list(consolidated_by_template.values()),
     }

@@ -481,11 +481,20 @@
                     addText(row, "part-code", match.part_code);
                     const metadata = document.createElement("div");
                     metadata.className = "metadata";
+                    const purchaseLineIds = Array.isArray(
+                        match.purchase_order_line_ids,
+                    )
+                        ? match.purchase_order_line_ids
+                        : [match.purchase_order_line_id];
+                    const purchaseLineLabel =
+                        purchaseLineIds.length === 1
+                            ? "Purchase line ID"
+                            : "Purchase line IDs";
                     metadata.append(
                         document.createTextNode(match.product_template_name),
                         document.createElement("br"),
                         document.createTextNode(
-                            `Product template ID: ${match.product_template_id} · Purchase line ID: ${match.purchase_order_line_id}`,
+                            `Product template ID: ${match.product_template_id} · ${purchaseLineLabel}: ${purchaseLineIds.join(", ")}`,
                         ),
                     );
                     row.appendChild(metadata);
@@ -494,17 +503,13 @@
                     const documentStatus = document.createElement("div");
                     documentStatus.className = "document-status";
                     if (match.document_match?.found) {
-                        const occurrenceLabel =
-                            match.document_match.occurrence_count === 1
-                                ? "occurrence"
-                                : "occurrences";
                         const pageLabel =
                             match.document_match.matching_page_count === 1
-                                ? "page"
-                                : "pages";
+                                ? "label page"
+                                : "label pages";
                         documentStatus.append(
                             document.createTextNode(
-                                `${match.document_match.occurrence_count} ${occurrenceLabel} found on ${match.document_match.matching_page_count} PDF ${pageLabel}: ${match.document_match.page_numbers.join(", ")}.`,
+                                `${match.document_match.matching_page_count} matching PDF ${pageLabel} found: ${match.document_match.page_numbers.join(", ")}.`,
                             ),
                             document.createElement("br"),
                         );
@@ -513,7 +518,7 @@
                         printLink.href = match.document_match.print_url;
                         printLink.target = "_blank";
                         printLink.rel = "noopener";
-                        printLink.textContent = "Print first matching page";
+                        printLink.textContent = "Print first matching label";
                         documentStatus.appendChild(printLink);
 
                         if (match.document_match.matching_page_count > 1) {
@@ -524,7 +529,7 @@
                                 match.document_match.all_print_url;
                             printAllLink.target = "_blank";
                             printAllLink.rel = "noopener";
-                            printAllLink.textContent = `Print all matching pages (${match.document_match.matching_page_count})`;
+                            printAllLink.textContent = `Print all matching labels (${match.document_match.matching_page_count})`;
                             documentStatus.appendChild(printAllLink);
                         }
                     } else {

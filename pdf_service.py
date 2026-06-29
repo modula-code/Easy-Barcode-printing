@@ -161,6 +161,9 @@ def prepare_matching_pages(
         code: [] for code in unique_codes
     }
     occurrence_count_by_code = {code: 0 for code in unique_codes}
+    occurrence_count_by_page_by_code: dict[str, dict[int, int]] = {
+        code: {} for code in unique_codes
+    }
 
     for page_index, page in enumerate(reader.pages):
         try:
@@ -173,6 +176,9 @@ def prepare_matching_pages(
             if occurrence_count:
                 page_indexes_by_code[code].append(page_index)
                 occurrence_count_by_code[code] += occurrence_count
+                occurrence_count_by_page_by_code[code][page_index] = (
+                    occurrence_count
+                )
 
     token_by_page_indexes: dict[tuple[int, ...], str] = {}
     results: dict[str, dict[str, object]] = {}
@@ -209,12 +215,32 @@ def prepare_matching_pages(
                 )
             token_by_page_indexes[all_key] = all_token
 
+        page_matches = []
+        for page_index in page_indexes:
+            page_key = (page_index,)
+            page_token = token_by_page_indexes.get(page_key)
+            if page_token is None:
+                page_token = _artifact_cache.put(
+                    _create_artifact(reader, list(page_key))
+                )
+                token_by_page_indexes[page_key] = page_token
+            page_matches.append(
+                {
+                    "page_number": page_index + 1,
+                    "occurrence_count": occurrence_count_by_page_by_code[
+                        code
+                    ][page_index],
+                    "token": page_token,
+                }
+            )
+
         results[code] = {
             "found": True,
             "page_number": page_indexes[0] + 1,
             "page_numbers": [page_index + 1 for page_index in page_indexes],
             "occurrence_count": occurrence_count_by_code[code],
             "matching_page_count": len(page_indexes),
+            "page_matches": page_matches,
             "first_token": first_token,
             "all_token": all_token,
         }
