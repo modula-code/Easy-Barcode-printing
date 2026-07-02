@@ -20,7 +20,6 @@ load_dotenv()
 from odoo_client import (  # noqa: E402
     OdooConfigurationError,
     OdooLookupError,
-    fetch_panel_label_pdf,
     get_partner_ref,
     lookup_part_codes,
 )
@@ -66,36 +65,6 @@ def partner_ref():
         return jsonify(error="The lookup failed unexpectedly."), 500
 
     return jsonify(result)
-
-
-@app.get("/api/panel-label")
-def panel_label():
-    po_number = str(request.args.get("po_number", "")).strip()
-    if not po_number:
-        return jsonify(error="PO number is required."), 400
-
-    try:
-        result = fetch_panel_label_pdf(po_number)
-    except OdooLookupError as exc:
-        return jsonify(error=str(exc)), 404
-    except OdooConfigurationError as exc:
-        return jsonify(error=str(exc)), 500
-    except (xmlrpc.client.Error, OSError, TimeoutError) as exc:
-        app.logger.exception("Odoo report download failed")
-        return jsonify(error=f"Could not fetch the report from Odoo: {exc}"), 502
-    except Exception:
-        app.logger.exception("Unexpected panel label fetch failure")
-        return jsonify(error="The report fetch failed unexpectedly."), 500
-
-    response = send_file(
-        io.BytesIO(result["pdf_bytes"]),
-        mimetype="application/pdf",
-        as_attachment=False,
-        download_name=f"panel-label-{result['po_number']}.pdf",
-        max_age=0,
-    )
-    response.headers["X-Picking-Names"] = ", ".join(result["picking_names"])
-    return response
 
 
 @app.post("/api/lookup")
