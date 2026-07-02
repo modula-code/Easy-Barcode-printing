@@ -393,6 +393,14 @@
                                 All pages containing the result part code will
                                 be found for printing.
                             </span>
+                            <button id="fetch-label-button" type="button">
+                                Fetch Panel Label from Odoo
+                            </button>
+                            <span
+                                id="fetch-label-result"
+                                class="hint"
+                                hidden
+                            ></span>
                         </div>
                     </div>
 
@@ -413,6 +421,127 @@
             const results = document.querySelector("#results");
             const checkPoButton = document.querySelector("#check-po-button");
             const poCheckResult = document.querySelector("#po-check-result");
+            const poInput = document.querySelector("#po-number");
+            const documentInput = document.querySelector("#document");
+            const fetchLabelButton = document.querySelector(
+                "#fetch-label-button",
+            );
+            const fetchLabelResult = document.querySelector(
+                "#fetch-label-result",
+            );
+            let fetchedLabelFile = null;
+
+            fetchLabelButton.addEventListener("click", async () => {
+                const poNumber = poInput.value.trim().toUpperCase();
+                if (!poNumber) {
+                    fetchLabelResult.hidden = false;
+                    fetchLabelResult.textContent = "Enter a PO number first.";
+                    return;
+                }
+
+                fetchLabelButton.disabled = true;
+                fetchLabelResult.hidden = false;
+                fetchLabelResult.textContent = "Fetching Panel Label…";
+                try {
+                    const response = await fetch(
+                        `/api/panel-label?po_number=${encodeURIComponent(poNumber)}`,
+                    );
+                    if (!response.ok) {
+                        const data = await response.json();
+                        throw new Error(data.error || "Fetch failed.");
+                    }
+                    const blob = await response.blob();
+                    fetchedLabelFile = new File(
+                        [blob],
+                        `panel-label-${poNumber}.pdf`,
+                        { type: "application/pdf" },
+                    );
+                    documentInput.required = false;
+                    documentInput.value = "";
+                    const pickings = response.headers.get("X-Picking-Names");
+                    const soNumber = response.headers.get("X-So-Number");
+                    const fullPo = response.headers.get("X-Po-Number");
+                    fetchLabelResult.textContent =
+                        `Fetched Panel Label (${Math.max(1, Math.round(blob.size / 1024))} KB` +
+                        (fullPo && fullPo !== poNumber
+                            ? `, PO: ${fullPo}`
+                            : "") +
+                        (soNumber ? `, SO: ${soNumber}` : "") +
+                        (pickings ? `, deliveries: ${pickings}` : "") +
+                        "). Uploading a file replaces it.";
+                } catch (error) {
+                    fetchedLabelFile = null;
+                    documentInput.required = true;
+                    fetchLabelResult.textContent =
+                        error.message || "Fetch failed.";
+                } finally {
+                    fetchLabelButton.disabled = false;
+                }
+            });
+
+            // Barcode scanner support: scanners type very fast and finish
+            // with Enter. Fast bursts fill SM Code 1, then SM Code 2, then
+            // alternate 1 -> 2 -> 1 so the newest two scans are kept.
+            const code1Input = document.querySelector("#code-1");
+            const code2Input = document.querySelector("#code-2");
+            let scanBuffer = "";
+            let scanLastKeyAt = 0;
+            let scanFocusTarget = null;
+            let scanFocusValue = "";
+            let scanOverrideSlot = 0;
+
+            function fillScannedCode(code) {
+                if (!code1Input.value) {
+                    code1Input.value = code;
+                    scanOverrideSlot = 0;
+                } else if (!code2Input.value) {
+                    code2Input.value = code;
+                    scanOverrideSlot = 0;
+                } else {
+                    [code1Input, code2Input][scanOverrideSlot].value = code;
+                    scanOverrideSlot = 1 - scanOverrideSlot;
+                }
+            }
+
+            document.addEventListener("keydown", (event) => {
+                const now = Date.now();
+                if (now - scanLastKeyAt > 50) {
+                    scanBuffer = "";
+                    scanFocusTarget = document.activeElement;
+                    scanFocusValue =
+                        scanFocusTarget && "value" in scanFocusTarget
+                            ? scanFocusTarget.value
+                            : "";
+                }
+                scanLastKeyAt = now;
+                if (event.key === "Enter") {
+                    if (scanBuffer.length >= 4) {
+                        event.preventDefault();
+                        // undo scan characters typed into a focused input
+                        if (
+                            scanFocusTarget &&
+                            "value" in scanFocusTarget
+                        ) {
+                            scanFocusTarget.value = scanFocusValue;
+                        }
+                        fillScannedCode(scanBuffer.trim().toUpperCase());
+                    }
+                    scanBuffer = "";
+                    return;
+                }
+                if (event.key.length === 1) {
+                    scanBuffer += event.key;
+                }
+            });
+
+            poInput.addEventListener("input", () => {
+                if (fetchedLabelFile) {
+                    fetchedLabelFile = null;
+                    documentInput.required = true;
+                    fetchLabelResult.textContent =
+                        "PO changed — fetch the Panel Label again.";
+                }
+            });
 
             checkPoButton.addEventListener("click", async () => {
                 const poNumber = document
@@ -436,7 +565,7 @@
                     if (!response.ok) {
                         throw new Error(data.error || "Lookup failed.");
                     }
-                    poCheckResult.textContent = `partner_ref: ${data.partner_ref ?? "(empty)"}`;
+                    poCheckResult.textContent = `${data.po_number}: partner_ref: ${data.partner_ref ?? "(empty)"}`;
                 } catch (error) {
                     poCheckResult.textContent = error.message || "Lookup failed.";
                 } finally {
@@ -567,6 +696,10 @@
                 clearOutput();
 
                 const formData = new FormData(form);
+                const uploaded = formData.get("document");
+                if ((!uploaded || !uploaded.size) && fetchedLabelFile) {
+                    formData.set("document", fetchedLabelFile);
+                }
                 const code1 = formData.get("code1").trim().toUpperCase();
                 const code2 = formData.get("code2").trim().toUpperCase();
                 if (!code1 && !code2) {

@@ -1,6 +1,10 @@
+import json
 import os
+import urllib.parse
+import urllib.request
 import xmlrpc.client
 from collections.abc import Callable
+from http.cookiejar import CookieJar
 from typing import Any
 
 from dotenv import load_dotenv
@@ -8,6 +12,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 Execute = Callable[[str, str, list[Any], dict[str, Any]], Any]
+
+PANEL_LABEL_REPORT = os.getenv(
+    "ODOO_PANEL_LABEL_REPORT", "stock.report_delivery_label_3x8"
+)
 
 
 class OdooConfigurationError(RuntimeError):
@@ -120,6 +128,51 @@ def _many2one_name(value: Any) -> str:
     return ""
 
 
+PO_FALLBACK_COMPANY_ID = int(os.getenv("ODOO_PO_COMPANY_ID", "1"))
+
+
+def _find_purchase_order(
+    execute: Execute, po_number: str, fields: list[str]
+) -> dict[str, Any]:
+    """Find a PO by full name, or by its floor short code (e.g. 'PO09862').
+
+    Company 1 PO names look like '06/26-27/PO09862' but the floor only knows
+    the trailing 'PO09862', so fall back to a suffix search in that company.
+    """
+    orders = _search_read(
+        execute,
+        "purchase.order",
+        [("name", "=", po_number)],
+        fields,
+        limit=1,
+    )
+    if orders:
+        return orders[0]
+
+    orders = _search_read(
+        execute,
+        "purchase.order",
+        [
+            ("name", "=ilike", f"%{po_number}"),
+            ("company_id", "=", PO_FALLBACK_COMPANY_ID),
+        ],
+        fields,
+        limit=5,
+        order="id desc",
+    )
+    if len(orders) > 1:
+        names = ", ".join(str(order.get("name")) for order in orders)
+        raise OdooLookupError(
+            f"Purchase order '{po_number}' is ambiguous: {names}. "
+            "Enter the full PO number."
+        )
+    if not orders:
+        raise OdooLookupError(
+            f"Purchase order '{po_number}' was not found."
+        )
+    return orders[0]
+
+
 def get_partner_ref(
     po_number: str,
     *,
@@ -133,23 +186,150 @@ def get_partner_ref(
     if execute is None:
         execute, _ = _connect()
 
-    orders = _search_read(
-        execute,
-        "purchase.order",
-        [("name", "=", normalized_po)],
-        ["id", "name", "partner_ref"],
-        limit=1,
+    order = _find_purchase_order(
+        execute, normalized_po, ["id", "name", "partner_ref"]
     )
-    if not orders:
-        raise OdooLookupError(
-            f"Purchase order '{normalized_po}' was not found."
-        )
-
-    order = orders[0]
     return {
         "po_number": order.get("name") or normalized_po,
         "purchase_order_id": order["id"],
         "partner_ref": order.get("partner_ref"),
+    }
+
+
+def _download_report_pdf(
+    picking_ids: list[int], company_ids: list[int] | None = None
+) -> bytes:
+    """Download the Panel Label report through Odoo's web session.
+
+    Odoo 17 does not expose report rendering over XML-RPC, so this logs in via
+    /web/session/authenticate (needs the real password, an API key is not
+    enough) and downloads /report/pdf/<report>/<ids>.
+    """
+    url, db, username, password, timeout = _settings()
+
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(CookieJar())
+    )
+    auth_request = urllib.request.Request(
+        f"{url}/web/session/authenticate",
+        data=json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "params": {"db": db, "login": username, "password": password},
+            }
+        ).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with opener.open(auth_request, timeout=timeout) as response:
+        session = json.load(response)
+    if not (session.get("result") or {}).get("uid"):
+        raise OdooConfigurationError(
+            "Odoo web login failed. Report download requires the real "
+            "ODOO_PASSWORD (an API key is not enough)."
+        )
+
+    ids = ",".join(str(picking_id) for picking_id in picking_ids)
+    report_url = f"{url}/report/pdf/{PANEL_LABEL_REPORT}/{ids}"
+    if company_ids:
+        # pickings from another company 403 unless it is in allowed_company_ids
+        report_url += "?context=" + urllib.parse.quote(
+            json.dumps({"allowed_company_ids": list(company_ids)})
+        )
+    # ponytail: report rendering is slow on SaaS, floor the timeout at 120s
+    with opener.open(report_url, timeout=max(timeout, 120)) as response:
+        pdf_bytes = response.read()
+    if not pdf_bytes.startswith(b"%PDF-"):
+        raise OdooLookupError(
+            f"Odoo did not return a PDF for report '{PANEL_LABEL_REPORT}'."
+        )
+    return pdf_bytes
+
+
+def fetch_panel_label_pdf(
+    po_number: str,
+    *,
+    execute: Execute | None = None,
+    download: Callable[[list[int]], bytes] | None = None,
+) -> dict[str, Any]:
+    """Fetch the Panel Label PDF for the sale order linked to a purchase order.
+
+    The PO's partner_ref holds the sale order name (e.g. 'S00334'); the label
+    is printed from that SO's Ready delivery orders.
+    """
+    normalized_po = po_number.strip()
+    if not normalized_po:
+        raise ValueError("PO number is required.")
+
+    if execute is None:
+        execute, _ = _connect()
+
+    order = _find_purchase_order(
+        execute, normalized_po, ["id", "name", "partner_ref"]
+    )
+    so_number = str(order.get("partner_ref") or "").strip()
+    if not so_number:
+        raise OdooLookupError(
+            f"Purchase order '{normalized_po}' has no partner_ref, so the "
+            "sale order cannot be determined."
+        )
+
+    sale_orders = _search_read(
+        execute,
+        "sale.order",
+        [("name", "=", so_number)],
+        ["id", "name", "picking_ids"],
+        limit=1,
+    )
+    if not sale_orders:
+        raise OdooLookupError(
+            f"Sale order '{so_number}' (partner_ref of '{normalized_po}') "
+            "was not found."
+        )
+    sale_order = sale_orders[0]
+    picking_ids = sale_order.get("picking_ids") or []
+    if not picking_ids:
+        raise OdooLookupError(
+            f"Sale order '{so_number}' has no deliveries."
+        )
+
+    # 'assigned' is what Odoo displays as Ready
+    pickings = _search_read(
+        execute,
+        "stock.picking",
+        [
+            ("id", "in", picking_ids),
+            ("state", "=", "assigned"),
+            ("picking_type_id.code", "=", "outgoing"),
+        ],
+        ["id", "name", "state", "company_id"],
+        order="id",
+    )
+    if not pickings:
+        raise OdooLookupError(
+            f"Sale order '{so_number}' has no delivery orders in "
+            "Ready state."
+        )
+
+    if download is None:
+        company_ids = sorted(
+            {
+                company_id
+                for picking in pickings
+                if (company_id := _many2one_id(picking.get("company_id")))
+                is not None
+            }
+        )
+
+        def download(ids: list[int]) -> bytes:
+            return _download_report_pdf(ids, company_ids=company_ids)
+
+    pdf_bytes = download([picking["id"] for picking in pickings])
+
+    return {
+        "po_number": order.get("name") or normalized_po,
+        "so_number": so_number,
+        "picking_names": [picking["name"] for picking in pickings],
+        "pdf_bytes": pdf_bytes,
     }
 
 
@@ -183,19 +363,9 @@ def lookup_part_codes(
     if execute is None:
         execute, _ = _connect()
 
-    orders = _search_read(
-        execute,
-        "purchase.order",
-        [("name", "=", normalized_po)],
-        ["id", "name", "partner_ref"],
-        limit=1,
+    order = _find_purchase_order(
+        execute, normalized_po, ["id", "name", "partner_ref"]
     )
-    if not orders:
-        raise OdooLookupError(
-            f"Purchase order '{normalized_po}' was not found."
-        )
-
-    order = orders[0]
     order_id = order["id"]
     print(f"[lookup] PO {order.get('name')} partner_ref={order.get('partner_ref')!r}")
     unique_codes = list(dict.fromkeys(normalized_codes))
@@ -204,21 +374,39 @@ def lookup_part_codes(
     product_ids_by_code: dict[str, set[int]] = {
         code: set() for code in unique_codes
     }
+    ptav_ids_by_product: dict[int, list[int]] = {}
     for code in unique_codes:
+        # active BOMs still reference archived components (e.g. SM-0082),
+        # so include archived products in the lookup. A bare code without a
+        # colour suffix (e.g. 'SM-0079') also pulls its colour variants
+        # ('SM-0079 - B3', 'SM-0079-AA') so the user can pick a colour.
         products = _search_read(
             execute,
             "product.product",
-            [("default_code", "=ilike", code)],
-            ["id", "default_code"],
+            [
+                "|",
+                "|",
+                ("default_code", "=ilike", code),
+                ("default_code", "=ilike", f"{code} - %"),
+                ("default_code", "=ilike", f"{code}-%"),
+            ],
+            ["id", "default_code", "product_template_attribute_value_ids"],
             limit=100,
+            context={"active_test": False},
         )
+        variant_prefixes = (f"{code} - ", f"{code}-")
         for product in products:
             actual_code = str(product.get("default_code") or "").strip().upper()
-            if actual_code != code:
+            if actual_code != code and not actual_code.startswith(
+                variant_prefixes
+            ):
                 continue
             product_id = product["id"]
             product_code_by_id[product_id] = code
             product_ids_by_code[code].add(product_id)
+            ptav_ids_by_product[product_id] = list(
+                product.get("product_template_attribute_value_ids") or []
+            )
 
     product_ids = sorted(product_code_by_id)
     bom_lines = (
@@ -304,7 +492,14 @@ def lookup_part_codes(
             execute,
             "product.product",
             [("id", "in", purchase_product_ids)],
-            ["id", "product_tmpl_id", "name", "default_code"],
+            [
+                "id",
+                "product_tmpl_id",
+                "name",
+                "default_code",
+                "product_template_attribute_value_ids",
+            ],
+            context={"active_test": False},
         )
         if purchase_product_ids
         else []
@@ -329,45 +524,108 @@ def lookup_part_codes(
             "product.template",
             [("id", "in", matched_template_ids)],
             ["id", "name", "default_code"],
+            context={"active_test": False},
         )
         if matched_template_ids
         else []
     )
     template_by_id = {template["id"]: template for template in templates}
 
-    purchase_lines_by_template: dict[int, list[dict[str, Any]]] = {}
+    # Components and finished products are colour variants linked only by a
+    # shared attribute value (e.g. 'SM-0079 - B3' and 'M-001-C-B3' both carry
+    # Colour: MATT PALACE DADO), so matching must compare attribute values.
+    all_ptav_ids = sorted(
+        {
+            ptav_id
+            for ptav_ids in ptav_ids_by_product.values()
+            for ptav_id in ptav_ids
+        }
+        | {
+            ptav_id
+            for product in purchase_products
+            for ptav_id in (
+                product.get("product_template_attribute_value_ids") or []
+            )
+        }
+    )
+    ptavs = (
+        _search_read(
+            execute,
+            "product.template.attribute.value",
+            [("id", "in", all_ptav_ids)],
+            ["id", "product_attribute_value_id"],
+            context={"active_test": False},
+        )
+        if all_ptav_ids
+        else []
+    )
+    value_id_by_ptav = {
+        ptav["id"]: _many2one_id(ptav.get("product_attribute_value_id"))
+        for ptav in ptavs
+    }
+
+    def attribute_values(ptav_ids: list[int]) -> frozenset[int]:
+        return frozenset(
+            value_id
+            for ptav_id in ptav_ids
+            if (value_id := value_id_by_ptav.get(ptav_id)) is not None
+        )
+
+    required_value_sets_by_code: dict[str, list[frozenset[int]]] = {
+        code: [
+            attribute_values(ptav_ids_by_product.get(product_id, []))
+            for product_id in sorted(product_ids)
+        ]
+        for code, product_ids in product_ids_by_code.items()
+    }
+    finished_values_by_product = {
+        product["id"]: attribute_values(
+            product.get("product_template_attribute_value_ids") or []
+        )
+        for product in purchase_products
+    }
+
+    purchase_lines_by_product: dict[int, list[dict[str, Any]]] = {}
     for line in purchase_lines:
         product_id = _many2one_id(line.get("product_id"))
-        product = purchase_product_by_id.get(product_id, {})
-        template_id = _many2one_id(product.get("product_tmpl_id"))
-        if template_id is not None:
-            purchase_lines_by_template.setdefault(template_id, []).append(
-                line
-            )
+        if product_id is not None:
+            purchase_lines_by_product.setdefault(product_id, []).append(line)
 
     results = []
     for code in normalized_codes:
         candidate_ids = template_ids_by_code.get(code, set())
+        required_sets = required_value_sets_by_code.get(code) or [frozenset()]
         matches = []
-        for template_id in sorted(candidate_ids):
-            template_purchase_lines = sorted(
-                purchase_lines_by_template.get(template_id, []),
-                key=lambda line: int(line["id"]),
+        template_level_hit = False
+        for product_id in sorted(purchase_lines_by_product):
+            product = purchase_product_by_id.get(product_id, {})
+            template_id = _many2one_id(product.get("product_tmpl_id"))
+            if template_id not in candidate_ids:
+                continue
+            template_level_hit = True
+
+            finished_values = finished_values_by_product.get(
+                product_id, frozenset()
             )
-            if not template_purchase_lines:
+            if not any(
+                required <= finished_values for required in required_sets
+            ):
                 continue
 
-            primary_line = template_purchase_lines[0]
-            product_id = _many2one_id(primary_line.get("product_id"))
-            product = purchase_product_by_id.get(product_id, {})
+            product_purchase_lines = sorted(
+                purchase_lines_by_product[product_id],
+                key=lambda line: int(line["id"]),
+            )
+            primary_line = product_purchase_lines[0]
             relation_name = _many2one_name(primary_line.get("product_id"))
             template = template_by_id.get(template_id, {})
-            purchase_line_ids = [line["id"] for line in template_purchase_lines]
+            purchase_line_ids = [line["id"] for line in product_purchase_lines]
             matches.append(
                 {
                     "part_code": product.get("default_code")
                     or template.get("default_code")
                     or relation_name,
+                    "product_id": product_id,
                     "product_template_id": template_id,
                     "product_template_name": template.get("name")
                     or product.get("name")
@@ -382,21 +640,26 @@ def lookup_part_codes(
             error = f"Product '{code}' was not found in Odoo."
         elif not candidate_ids:
             error = f"No BOM line was found for component '{code}'."
-        elif not matches:
+        elif matches:
+            error = None
+        elif template_level_hit:
+            error = (
+                f"Component '{code}' matches finished products on purchase "
+                f"order '{normalized_po}', but none share its colour/variant."
+            )
+        else:
             error = (
                 f"Component '{code}' is used in BOMs, but none of their finished "
                 f"products are present in purchase order '{normalized_po}'."
             )
-        else:
-            error = None
 
         results.append({"sm_code": code, "matches": matches, "error": error})
 
-    consolidated_by_template: dict[int, dict[str, Any]] = {}
+    consolidated_by_product: dict[int, dict[str, Any]] = {}
     for item in results:
         for match in item["matches"]:
-            key = match["product_template_id"]
-            consolidated = consolidated_by_template.setdefault(
+            key = match["product_id"]
+            consolidated = consolidated_by_product.setdefault(
                 key,
                 {
                     **match,
@@ -426,5 +689,5 @@ def lookup_part_codes(
         "purchase_order_id": order_id,
         "partner_ref": order.get("partner_ref"),
         "results": results,
-        "matches": list(consolidated_by_template.values()),
+        "matches": list(consolidated_by_product.values()),
     }
