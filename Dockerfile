@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y curl poppler-utils \
+    && apt-get install --no-install-recommends -y curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -16,7 +16,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 RUN useradd --create-home --uid 10001 appuser \
-    && mkdir -p /app/tmp/pdfs \
     && chown -R appuser:appuser /app
 
 USER appuser

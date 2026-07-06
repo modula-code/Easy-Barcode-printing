@@ -42,16 +42,16 @@
             }
 
             main {
-                width: min(760px, calc(100% - 32px));
-                margin: 56px auto;
+                width: min(720px, calc(100% - 20px));
+                margin: 24px auto;
             }
 
             .panel {
                 background: var(--surface);
                 border: 1px solid var(--line);
-                border-radius: 16px;
-                box-shadow: 0 16px 42px rgba(79, 55, 47, 0.14);
-                padding: clamp(24px, 5vw, 40px);
+                border-radius: 8px;
+                box-shadow: 0 8px 24px rgba(79, 55, 47, 0.1);
+                padding: clamp(18px, 4vw, 30px);
             }
 
             .brand {
@@ -59,8 +59,8 @@
                 align-items: center;
                 justify-content: space-between;
                 gap: 24px;
-                margin-bottom: 18px;
-                padding-bottom: 22px;
+                margin-bottom: 14px;
+                padding-bottom: 16px;
                 border-bottom: 1px solid var(--line);
             }
 
@@ -72,13 +72,13 @@
 
             h1 {
                 margin: 0;
-                font-size: clamp(1.65rem, 4vw, 2.25rem);
-                letter-spacing: -0.035em;
+                font-size: clamp(1.5rem, 4vw, 2rem);
+                letter-spacing: 0;
                 color: var(--ink);
             }
 
             .intro {
-                margin: 0 0 30px;
+                margin: 0 0 22px;
                 color: var(--muted);
                 line-height: 1.55;
             }
@@ -86,7 +86,7 @@
             .form-grid {
                 display: grid;
                 grid-template-columns: 1fr 1fr;
-                gap: 20px;
+                gap: 14px;
             }
 
             .field:first-child,
@@ -97,14 +97,14 @@
             label {
                 display: block;
                 margin-bottom: 7px;
-                font-size: 0.9rem;
+                font-size: 1rem;
                 font-weight: 700;
             }
 
             input {
                 width: 100%;
-                min-height: 46px;
-                padding: 10px 12px;
+                min-height: 56px;
+                padding: 12px 14px;
                 border: 1px solid var(--line);
                 border-radius: 9px;
                 color: var(--ink);
@@ -151,8 +151,8 @@
 
             button {
                 width: 100%;
-                min-height: 48px;
-                margin-top: 24px;
+                min-height: 56px;
+                margin-top: 14px;
                 border: 0;
                 border-radius: 9px;
                 background: var(--primary);
@@ -172,8 +172,8 @@
                 transform: translateY(1px);
             }
             button:disabled {
-                cursor: wait;
-                opacity: 0.68;
+                cursor: not-allowed;
+                opacity: 0.58;
             }
 
             #message {
@@ -193,7 +193,7 @@
 
             .result-card {
                 border: 1px solid var(--line);
-                border-radius: 11px;
+                border-radius: 8px;
                 overflow: hidden;
             }
 
@@ -222,7 +222,7 @@
 
             .match {
                 display: grid;
-                grid-template-columns: minmax(130px, 0.7fr) 1.3fr;
+                grid-template-columns: minmax(150px, 0.8fr) 1.2fr;
                 gap: 8px 18px;
                 padding: 15px;
                 background: var(--success-bg);
@@ -234,14 +234,14 @@
 
             .part-code {
                 align-self: center;
-                font-size: 1.1rem;
+                font-size: 1.25rem;
                 font-weight: 800;
                 word-break: break-word;
             }
 
             .metadata {
                 color: var(--muted);
-                font-size: 0.86rem;
+                font-size: 1rem;
                 line-height: 1.55;
             }
 
@@ -265,7 +265,7 @@
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                min-height: 40px;
+                min-height: 52px;
                 margin-top: 10px;
                 padding: 8px 13px;
                 border-radius: 8px;
@@ -323,37 +323,37 @@
                         src="{{ url_for('static', filename='logo.svg') }}"
                         alt="Modula SW Enterprise"
                     />
-                    <h1>Easy Barcode Printing</h1>
+                    <h1>Label Printing</h1>
                 </header>
                 <p class="intro">
-                    Enter one purchase order and one or two component product codes.
-                    The lookup finds the finished BOM products that are present
-                    as lines on that purchase order.
+                    Scan the PO, scan one or two SM codes, then print the matching label page.
                 </p>
 
                 <form id="lookup-form">
                     <div class="form-grid">
                         <div class="field">
-                            <label for="po-number">Purchase order number</label>
+                            <label for="po-number">PO number</label>
                             <input
                                 id="po-number"
                                 name="po_number"
                                 type="text"
-                                placeholder="P00001"
+                                placeholder="09862 or PO09862"
+                                list="po-suggestions"
                                 autocomplete="off"
                                 required
                             />
+                            <datalist id="po-suggestions"></datalist>
                             <button id="check-po-button" type="button">
-                                Check partner_ref
+                                Check PO
                             </button>
                             <span id="po-check-result" class="hint" hidden></span>
                             <span class="hint"
-                                >Matches purchase.order.name exactly.</span
+                                >Number only works, for example 09862.</span
                             >
                         </div>
 
                         <div class="field">
-                            <label for="code-1">SM Code 1 (optional)</label>
+                            <label for="code-1">SM code 1</label>
                             <input
                                 id="code-1"
                                 name="code1"
@@ -361,13 +361,10 @@
                                 autocomplete="off"
                                 autocapitalize="characters"
                             />
-                            <span class="hint"
-                                >Enter this code, code 2, or both.</span
-                            >
                         </div>
 
                         <div class="field">
-                            <label for="code-2">SM code 2 (optional)</label>
+                            <label for="code-2">SM code 2</label>
                             <input
                                 id="code-2"
                                 name="code2"
@@ -375,13 +372,10 @@
                                 autocomplete="off"
                                 autocapitalize="characters"
                             />
-                            <span class="hint"
-                                >Enter this code, code 1, or both.</span
-                            >
                         </div>
 
                         <div class="field full-width">
-                            <label for="document">Upload PDF document</label>
+                            <label for="document">Label PDF</label>
                             <input
                                 id="document"
                                 name="document"
@@ -390,11 +384,10 @@
                                 required
                             />
                             <span class="hint">
-                                All pages containing the result part code will
-                                be found for printing.
+                                Fetch from Odoo or upload a PDF.
                             </span>
                             <button id="fetch-label-button" type="button">
-                                Fetch Panel Label from Odoo
+                                Fetch Label PDF
                             </button>
                             <span
                                 id="fetch-label-result"
@@ -405,7 +398,7 @@
                     </div>
 
                     <button id="submit-button" type="submit">
-                        Find code and page
+                        Find label pages
                     </button>
                 </form>
 
@@ -422,6 +415,7 @@
             const checkPoButton = document.querySelector("#check-po-button");
             const poCheckResult = document.querySelector("#po-check-result");
             const poInput = document.querySelector("#po-number");
+            const poSuggestions = document.querySelector("#po-suggestions");
             const documentInput = document.querySelector("#document");
             const fetchLabelButton = document.querySelector(
                 "#fetch-label-button",
@@ -429,7 +423,51 @@
             const fetchLabelResult = document.querySelector(
                 "#fetch-label-result",
             );
+            const fetchLabelButtonText = fetchLabelButton.textContent.trim();
+            const submitButtonText = button.textContent.trim();
             let fetchedLabelFile = null;
+            let poSuggestionTimer = 0;
+            let poSuggestionController = null;
+
+            function unlockFetchedLabel(text) {
+                fetchedLabelFile = null;
+                documentInput.required = true;
+                fetchLabelButton.disabled = false;
+                fetchLabelButton.textContent = fetchLabelButtonText;
+                if (text) {
+                    fetchLabelResult.hidden = false;
+                    fetchLabelResult.textContent = text;
+                }
+            }
+
+            async function loadPoSuggestions() {
+                const query = poInput.value.trim().toUpperCase();
+                poSuggestions.replaceChildren();
+                if (query.length < 2) return;
+
+                poSuggestionController?.abort();
+                poSuggestionController = new AbortController();
+                try {
+                    const response = await fetch(
+                        `/api/po-suggestions?q=${encodeURIComponent(query)}`,
+                        { signal: poSuggestionController.signal },
+                    );
+                    if (!response.ok) return;
+                    const data = await response.json();
+                    for (const suggestion of data.suggestions || []) {
+                        const option = document.createElement("option");
+                        option.value = suggestion.po_number;
+                        option.label = suggestion.partner_ref
+                            ? `partner_ref: ${suggestion.partner_ref}`
+                            : "Purchase order";
+                        poSuggestions.appendChild(option);
+                    }
+                } catch (error) {
+                    if (error.name !== "AbortError") {
+                        poSuggestions.replaceChildren();
+                    }
+                }
+            }
 
             fetchLabelButton.addEventListener("click", async () => {
                 const poNumber = poInput.value.trim().toUpperCase();
@@ -453,29 +491,22 @@
                     const blob = await response.blob();
                     fetchedLabelFile = new File(
                         [blob],
-                        `panel-label-${poNumber}.pdf`,
+                        `panel-label-${poNumber.replace(/\//g, "-")}.pdf`,
                         { type: "application/pdf" },
                     );
                     documentInput.required = false;
                     documentInput.value = "";
-                    const pickings = response.headers.get("X-Picking-Names");
-                    const soNumber = response.headers.get("X-So-Number");
-                    const fullPo = response.headers.get("X-Po-Number");
-                    fetchLabelResult.textContent =
-                        `Fetched Panel Label (${Math.max(1, Math.round(blob.size / 1024))} KB` +
-                        (fullPo && fullPo !== poNumber
-                            ? `, PO: ${fullPo}`
-                            : "") +
-                        (soNumber ? `, SO: ${soNumber}` : "") +
-                        (pickings ? `, deliveries: ${pickings}` : "") +
-                        "). Uploading a file replaces it.";
+                    fetchLabelResult.textContent = "Label PDF fetched and locked.";
+                    fetchLabelButton.textContent = "Label PDF fetched";
                 } catch (error) {
-                    fetchedLabelFile = null;
-                    documentInput.required = true;
+                    unlockFetchedLabel();
                     fetchLabelResult.textContent =
                         error.message || "Fetch failed.";
                 } finally {
-                    fetchLabelButton.disabled = false;
+                    if (!fetchedLabelFile) {
+                        fetchLabelButton.disabled = false;
+                        fetchLabelButton.textContent = fetchLabelButtonText;
+                    }
                 }
             });
 
@@ -536,10 +567,15 @@
 
             poInput.addEventListener("input", () => {
                 if (fetchedLabelFile) {
-                    fetchedLabelFile = null;
-                    documentInput.required = true;
-                    fetchLabelResult.textContent =
-                        "PO changed — fetch the Panel Label again.";
+                    unlockFetchedLabel("PO changed. Fetch the label PDF again.");
+                }
+                clearTimeout(poSuggestionTimer);
+                poSuggestionTimer = setTimeout(loadPoSuggestions, 200);
+            });
+
+            documentInput.addEventListener("change", () => {
+                if (documentInput.files.length) {
+                    unlockFetchedLabel("Using uploaded PDF.");
                 }
             });
 
@@ -565,7 +601,7 @@
                     if (!response.ok) {
                         throw new Error(data.error || "Lookup failed.");
                     }
-                    poCheckResult.textContent = `${data.po_number}: partner_ref: ${data.partner_ref ?? "(empty)"}`;
+                    poCheckResult.textContent = `${data.po_number}: SO ${data.partner_ref ?? "(empty)"}`;
                 } catch (error) {
                     poCheckResult.textContent = error.message || "Lookup failed.";
                 } finally {
@@ -590,6 +626,7 @@
 
             function renderResults(data) {
                 results.replaceChildren();
+                let renderedAny = false;
 
                 for (const match of data.matches || []) {
                     const card = document.createElement("article");
@@ -601,7 +638,7 @@
                     code.textContent = match.sm_codes.join(", ");
                     const badge = document.createElement("span");
                     badge.className = "badge";
-                    badge.textContent = "Matched entry";
+                    badge.textContent = "Match";
                     heading.append(code, badge);
                     card.appendChild(heading);
 
@@ -610,22 +647,7 @@
                     addText(row, "part-code", match.part_code);
                     const metadata = document.createElement("div");
                     metadata.className = "metadata";
-                    const purchaseLineIds = Array.isArray(
-                        match.purchase_order_line_ids,
-                    )
-                        ? match.purchase_order_line_ids
-                        : [match.purchase_order_line_id];
-                    const purchaseLineLabel =
-                        purchaseLineIds.length === 1
-                            ? "Purchase line ID"
-                            : "Purchase line IDs";
-                    metadata.append(
-                        document.createTextNode(match.product_template_name),
-                        document.createElement("br"),
-                        document.createTextNode(
-                            `Product template ID: ${match.product_template_id} · ${purchaseLineLabel}: ${purchaseLineIds.join(", ")}`,
-                        ),
-                    );
+                    metadata.textContent = match.product_template_name;
                     row.appendChild(metadata);
                     card.appendChild(row);
 
@@ -638,7 +660,7 @@
                                 : "label pages";
                         documentStatus.append(
                             document.createTextNode(
-                                `${match.document_match.matching_page_count} matching PDF ${pageLabel} found: ${match.document_match.page_numbers.join(", ")}.`,
+                                `${match.document_match.matching_page_count} ${pageLabel}: ${match.document_match.page_numbers.join(", ")}.`,
                             ),
                             document.createElement("br"),
                         );
@@ -647,7 +669,7 @@
                         printLink.href = match.document_match.print_url;
                         printLink.target = "_blank";
                         printLink.rel = "noopener";
-                        printLink.textContent = "Print first matching label";
+                        printLink.textContent = "Print";
                         documentStatus.appendChild(printLink);
 
                         if (match.document_match.matching_page_count > 1) {
@@ -658,7 +680,7 @@
                                 match.document_match.all_print_url;
                             printAllLink.target = "_blank";
                             printAllLink.rel = "noopener";
-                            printAllLink.textContent = `Print all matching labels (${match.document_match.matching_page_count})`;
+                            printAllLink.textContent = `Print all (${match.document_match.matching_page_count})`;
                             documentStatus.appendChild(printAllLink);
                         }
                     } else {
@@ -667,6 +689,7 @@
                     card.appendChild(documentStatus);
 
                     results.appendChild(card);
+                    renderedAny = true;
                 }
 
                 const renderedErrors = new Set();
@@ -685,6 +708,23 @@
                     heading.appendChild(headingCode);
                     card.appendChild(heading);
                     addText(card, "result-error", item.error);
+                    results.appendChild(card);
+                    renderedAny = true;
+                }
+
+                if (!renderedAny) {
+                    const checkedCodes = [
+                        ...new Set((data.results || []).map((item) => item.sm_code)),
+                    ];
+                    const card = document.createElement("article");
+                    card.className = "result-card";
+                    addText(
+                        card,
+                        "result-error",
+                        checkedCodes.length > 1
+                            ? "No panel matches both SM codes."
+                            : "No matching panel found.",
+                    );
                     results.appendChild(card);
                 }
 
@@ -732,7 +772,7 @@
                     message.hidden = false;
                 } finally {
                     button.disabled = false;
-                    button.textContent = "Find code and page";
+                    button.textContent = submitButtonText;
                 }
             });
         </script>

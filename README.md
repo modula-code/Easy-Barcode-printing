@@ -33,12 +33,6 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Page rendering also requires Poppler:
-
-```bash
-brew install poppler
-```
-
 Fill in the Odoo values in `.env`, then run:
 
 ```bash

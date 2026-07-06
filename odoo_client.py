@@ -131,46 +131,98 @@ def _many2one_name(value: Any) -> str:
 PO_FALLBACK_COMPANY_ID = int(os.getenv("ODOO_PO_COMPANY_ID", "1"))
 
 
+def _po_search_terms(po_number: str) -> list[str]:
+    value = po_number.strip().upper()
+    terms = [value]
+    if value and "/" not in value and not value.startswith("PO"):
+        terms.append(f"PO{value}")
+    return list(dict.fromkeys(terms))
+
+
 def _find_purchase_order(
     execute: Execute, po_number: str, fields: list[str]
 ) -> dict[str, Any]:
-    """Find a PO by full name, or by its floor short code (e.g. 'PO09862').
+    """Find a PO by full name, floor short code, or number only.
 
     Company 1 PO names look like '06/26-27/PO09862' but the floor only knows
-    the trailing 'PO09862', so fall back to a suffix search in that company.
+    the trailing 'PO09862' or '09862', so fall back to a suffix search there.
     """
-    orders = _search_read(
-        execute,
-        "purchase.order",
-        [("name", "=", po_number)],
-        fields,
-        limit=1,
-    )
-    if orders:
-        return orders[0]
+    terms = _po_search_terms(po_number)
+    for term in terms:
+        orders = _search_read(
+            execute,
+            "purchase.order",
+            [("name", "=", term)],
+            fields,
+            limit=1,
+        )
+        if orders:
+            return orders[0]
 
+    suffix_terms = terms[1:] + terms[:1] if len(terms) > 1 else terms
+    for term in suffix_terms:
+        orders = _search_read(
+            execute,
+            "purchase.order",
+            [
+                ("name", "=ilike", f"%{term}"),
+                ("company_id", "=", PO_FALLBACK_COMPANY_ID),
+            ],
+            fields,
+            limit=5,
+            order="id desc",
+        )
+        if len(orders) > 1:
+            names = ", ".join(str(order.get("name")) for order in orders)
+            raise OdooLookupError(
+                f"Purchase order '{po_number}' is ambiguous: {names}. "
+                "Enter the full PO number."
+            )
+        if orders:
+            return orders[0]
+
+    raise OdooLookupError(f"Purchase order '{po_number}' was not found.")
+
+
+def suggest_purchase_orders(
+    po_number: str,
+    *,
+    execute: Execute | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    query = po_number.strip()
+    if not query:
+        return []
+
+    if execute is None:
+        execute, _ = _connect()
+
+    terms = _po_search_terms(query)
+    search_terms = terms[1:] + terms[:1] if len(terms) > 1 else terms
+    name_domain: list[Any] = [("name", "ilike", search_terms[0])]
+    if len(search_terms) > 1:
+        name_domain = [
+            "|",
+            ("name", "ilike", search_terms[0]),
+            ("name", "ilike", search_terms[1]),
+        ]
     orders = _search_read(
         execute,
         "purchase.order",
-        [
-            ("name", "=ilike", f"%{po_number}"),
-            ("company_id", "=", PO_FALLBACK_COMPANY_ID),
-        ],
-        fields,
-        limit=5,
+        name_domain,
+        ["id", "name", "partner_ref"],
+        limit=limit,
         order="id desc",
     )
-    if len(orders) > 1:
-        names = ", ".join(str(order.get("name")) for order in orders)
-        raise OdooLookupError(
-            f"Purchase order '{po_number}' is ambiguous: {names}. "
-            "Enter the full PO number."
-        )
-    if not orders:
-        raise OdooLookupError(
-            f"Purchase order '{po_number}' was not found."
-        )
-    return orders[0]
+    return [
+        {
+            "po_number": order.get("name"),
+            "purchase_order_id": order.get("id"),
+            "partner_ref": order.get("partner_ref"),
+        }
+        for order in orders
+        if order.get("name")
+    ]
 
 
 def get_partner_ref(
@@ -656,6 +708,7 @@ def lookup_part_codes(
         results.append({"sm_code": code, "matches": matches, "error": error})
 
     consolidated_by_product: dict[int, dict[str, Any]] = {}
+    required_codes = set(unique_codes) if len(unique_codes) > 1 else set()
     for item in results:
         for match in item["matches"]:
             key = match["product_id"]
@@ -684,10 +737,18 @@ def lookup_part_codes(
             if item["sm_code"] not in consolidated["sm_codes"]:
                 consolidated["sm_codes"].append(item["sm_code"])
 
+    matches = list(consolidated_by_product.values())
+    if required_codes:
+        matches = [
+            match
+            for match in matches
+            if required_codes <= set(match["sm_codes"])
+        ]
+
     return {
         "po_number": order.get("name") or normalized_po,
         "purchase_order_id": order_id,
         "partner_ref": order.get("partner_ref"),
         "results": results,
-        "matches": list(consolidated_by_product.values()),
+        "matches": matches,
     }

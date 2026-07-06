@@ -1,12 +1,8 @@
 import io
 import secrets
-import shutil
-import subprocess
-import tempfile
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
 from pypdf.errors import PdfReadError
@@ -19,9 +15,6 @@ class PDFSearchError(RuntimeError):
 @dataclass(frozen=True)
 class PrintArtifact:
     pdf_bytes: bytes
-    png_pages: tuple[bytes, ...]
-    page_numbers: tuple[int, ...]
-    page_sizes_pt: tuple[tuple[float, float], ...]
 
 
 class _PrintArtifactCache:
@@ -48,7 +41,6 @@ class _PrintArtifactCache:
 
 
 _artifact_cache = _PrintArtifactCache()
-_temp_root = Path(__file__).resolve().parent / "tmp" / "pdfs"
 
 
 def get_print_artifact(token: str) -> PrintArtifact | None:
@@ -79,61 +71,11 @@ def _selected_pages_pdf(reader: PdfReader, page_indexes: list[int]) -> bytes:
     return output.getvalue()
 
 
-def _render_pages(pdf_bytes: bytes) -> tuple[bytes, ...]:
-    pdftoppm = shutil.which("pdftoppm")
-    if not pdftoppm:
-        return ()
-
-    _temp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=_temp_root) as temporary_directory:
-        directory = Path(temporary_directory)
-        input_path = directory / "page.pdf"
-        output_prefix = directory / "page"
-        input_path.write_bytes(pdf_bytes)
-
-        try:
-            subprocess.run(
-                [
-                    pdftoppm,
-                    "-png",
-                    "-r",
-                    "180",
-                    str(input_path),
-                    str(output_prefix),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            raise PDFSearchError("The matching PDF page could not be rendered.") from exc
-
-        output_paths = sorted(
-            directory.glob("page-*.png"),
-            key=lambda path: int(path.stem.rsplit("-", 1)[1]),
-        )
-        if not output_paths:
-            raise PDFSearchError("The matching PDF page could not be rendered.")
-        return tuple(path.read_bytes() for path in output_paths)
-
-
 def _create_artifact(
     reader: PdfReader,
     page_indexes: list[int],
 ) -> PrintArtifact:
-    selected_pdf = _selected_pages_pdf(reader, page_indexes)
-    return PrintArtifact(
-        pdf_bytes=selected_pdf,
-        png_pages=_render_pages(selected_pdf),
-        page_numbers=tuple(page_index + 1 for page_index in page_indexes),
-        page_sizes_pt=tuple(
-            (
-                float(reader.pages[page_index].mediabox.width),
-                float(reader.pages[page_index].mediabox.height),
-            )
-            for page_index in page_indexes
-        ),
-    )
+    return PrintArtifact(pdf_bytes=_selected_pages_pdf(reader, page_indexes))
 
 
 def prepare_matching_pages(

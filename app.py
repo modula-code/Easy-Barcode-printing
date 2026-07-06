@@ -23,6 +23,7 @@ from odoo_client import (  # noqa: E402
     fetch_panel_label_pdf,
     get_partner_ref,
     lookup_part_codes,
+    suggest_purchase_orders,
 )
 from pdf_service import (  # noqa: E402
     PDFSearchError,
@@ -66,6 +67,26 @@ def partner_ref():
         return jsonify(error="The lookup failed unexpectedly."), 500
 
     return jsonify(result)
+
+
+@app.get("/api/po-suggestions")
+def po_suggestions():
+    query = str(request.args.get("q", "")).strip()
+    if not query:
+        return jsonify(suggestions=[])
+
+    try:
+        suggestions = suggest_purchase_orders(query)
+    except OdooConfigurationError as exc:
+        return jsonify(error=str(exc)), 500
+    except (xmlrpc.client.Error, OSError, TimeoutError) as exc:
+        app.logger.exception("Odoo PO suggestion request failed")
+        return jsonify(error=f"Could not query Odoo: {exc}"), 502
+    except Exception:
+        app.logger.exception("Unexpected PO suggestion failure")
+        return jsonify(error="The PO suggestion lookup failed unexpectedly."), 500
+
+    return jsonify(suggestions=suggestions)
 
 
 @app.get("/api/panel-label")
@@ -217,48 +238,9 @@ def lookup():
 
 @app.get("/print/<token>")
 def print_page(token):
-    artifact = get_print_artifact(token)
-    if artifact is None:
+    if get_print_artifact(token) is None:
         abort(404)
-    if not artifact.png_pages:
-        return redirect(url_for("print_page_pdf", token=token))
-
-    pages = [
-        {
-            "image_url": url_for(
-                "print_page_image",
-                token=token,
-                page_index=index,
-            ),
-            "source_page_number": source_page_number,
-            "width_pt": page_size[0],
-            "height_pt": page_size[1],
-        }
-        for index, (source_page_number, page_size) in enumerate(
-            zip(artifact.page_numbers, artifact.page_sizes_pt, strict=True)
-        )
-    ]
-    return render_template(
-        "print_page.html",
-        token=token,
-        pages=pages,
-    )
-
-
-@app.get("/api/print-pages/<token>/<int:page_index>.png")
-def print_page_image(token, page_index):
-    artifact = get_print_artifact(token)
-    if (
-        artifact is None
-        or page_index < 0
-        or page_index >= len(artifact.png_pages)
-    ):
-        abort(404)
-    return send_file(
-        io.BytesIO(artifact.png_pages[page_index]),
-        mimetype="image/png",
-        max_age=0,
-    )
+    return redirect(url_for("print_page_pdf", token=token))
 
 
 @app.get("/api/print-pages/<token>.pdf")
