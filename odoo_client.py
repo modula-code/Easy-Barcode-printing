@@ -8,6 +8,7 @@ import time
 import urllib.parse
 import urllib.request
 import xmlrpc.client
+from collections import Counter
 from collections.abc import Callable
 from http.cookiejar import CookieJar
 from typing import Any
@@ -515,6 +516,7 @@ def lookup_part_codes(
     )
     order_id = order["id"]
     print(f"[lookup] PO {order.get('name')} partner_ref={order.get('partner_ref')!r}")
+    required_code_counts = Counter(normalized_codes)
     unique_codes = list(dict.fromkeys(normalized_codes))
 
     product_code_by_id: dict[int, str] = {}
@@ -591,6 +593,9 @@ def lookup_part_codes(
     template_ids_by_code: dict[str, set[int]] = {
         code: set() for code in unique_codes
     }
+    template_code_counts_by_code: dict[str, dict[int, int]] = {
+        code: {} for code in unique_codes
+    }
     for line in bom_lines:
         product_id = _many2one_id(line.get("product_id"))
         bom_id = _many2one_id(line.get("bom_id"))
@@ -598,6 +603,8 @@ def lookup_part_codes(
         template_id = template_id_by_bom.get(bom_id)
         if code in template_ids_by_code and template_id is not None:
             template_ids_by_code[code].add(template_id)
+            counts = template_code_counts_by_code[code]
+            counts[template_id] = counts.get(template_id, 0) + 1
 
     candidate_template_ids = sorted(
         {
@@ -803,7 +810,6 @@ def lookup_part_codes(
         results.append({"sm_code": code, "matches": matches, "error": error})
 
     consolidated_by_product: dict[int, dict[str, Any]] = {}
-    required_codes = set(unique_codes) if len(unique_codes) > 1 else set()
     for item in results:
         for match in item["matches"]:
             key = match["product_id"]
@@ -833,12 +839,21 @@ def lookup_part_codes(
                 consolidated["sm_codes"].append(item["sm_code"])
 
     matches = list(consolidated_by_product.values())
-    if required_codes:
+    if len(normalized_codes) > 1:
         matches = [
             match
             for match in matches
-            if required_codes <= set(match["sm_codes"])
+            if all(
+                code in match["sm_codes"]
+                and template_code_counts_by_code.get(code, {}).get(
+                    match["product_template_id"], 0
+                )
+                >= count
+                for code, count in required_code_counts.items()
+            )
         ]
+        for match in matches:
+            match["sm_codes"] = list(normalized_codes)
 
     return {
         "po_number": order.get("name") or normalized_po,

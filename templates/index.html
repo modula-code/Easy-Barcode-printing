@@ -721,7 +721,7 @@
                     addText(
                         card,
                         "result-error",
-                        checkedCodes.length > 1
+                        (data.results || []).length > 1
                             ? "No panel matches both SM codes."
                             : "No matching panel found.",
                     );
