@@ -1,5 +1,10 @@
+import copy
+import http.client
 import json
+import logging
 import os
+import threading
+import time
 import urllib.parse
 import urllib.request
 import xmlrpc.client
@@ -70,39 +75,124 @@ def _settings() -> tuple[str, str, str, str, float]:
     )
 
 
-def _connect() -> tuple[Execute, int]:
-    url, db, username, password, timeout = _settings()
+logger = logging.getLogger(__name__)
+
+_auth_lock = threading.Lock()
+_uid: int | None = None
+_local = threading.local()  # .models = per-thread /object proxy (ServerProxy is not thread-safe)
+_RETRYABLE = (OSError, http.client.HTTPException, xmlrpc.client.ProtocolError)
+
+_CACHE_TTL = float(os.getenv("ODOO_CACHE_TTL", "300"))  # seconds; 0 disables
+_CACHEABLE_MODELS = {
+    "purchase.order",
+    "product.product",
+    "product.template",
+    "mrp.bom",
+    "mrp.bom.line",
+    "product.template.attribute.value",
+}
+_MISS = object()
+_cache: dict[str, tuple[float, Any]] = {}  # key -> (expires_at, value)
+_cache_lock = threading.Lock()
+
+
+def _transport() -> xmlrpc.client.Transport:
+    url, _, _, _, timeout = _settings()
     transport_class = (
         _TimeoutSafeTransport if url.lower().startswith("https://") else _TimeoutTransport
     )
-    transport = transport_class(timeout)
+    return transport_class(timeout)
 
-    common = xmlrpc.client.ServerProxy(
-        f"{url}/xmlrpc/2/common",
-        transport=transport,
-        allow_none=True,
-    )
-    uid = common.authenticate(db, username, password, {})
-    if not uid:
-        raise OdooConfigurationError(
-            "Odoo authentication failed. Check ODOO_DB, ODOO_USERNAME, and ODOO_PASSWORD."
+
+def _get_uid() -> int:
+    global _uid
+    with _auth_lock:
+        if _uid is None:
+            url, db, username, password, _ = _settings()
+            common = xmlrpc.client.ServerProxy(
+                f"{url}/xmlrpc/2/common",
+                transport=_transport(),
+                allow_none=True,
+            )
+            uid = common.authenticate(db, username, password, {})
+            if not uid:
+                raise OdooConfigurationError(
+                    "Odoo authentication failed. Check ODOO_DB, ODOO_USERNAME, and ODOO_PASSWORD."
+                )
+            _uid = uid
+        return _uid
+
+
+def _models_proxy() -> xmlrpc.client.ServerProxy:
+    models = getattr(_local, "models", None)
+    if models is None:
+        url = _settings()[0]
+        models = xmlrpc.client.ServerProxy(
+            f"{url}/xmlrpc/2/object",
+            transport=_transport(),
+            allow_none=True,
         )
+        _local.models = models
+    return models
 
-    models = xmlrpc.client.ServerProxy(
-        f"{url}/xmlrpc/2/object",
-        transport=transport_class(timeout),
-        allow_none=True,
+
+def _reset_connection() -> None:
+    global _uid
+    _local.models = None
+    with _auth_lock:
+        _uid = None
+
+
+def _rpc(model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
+    _, db, _, password, _ = _settings()
+    uid = _get_uid()
+    return _models_proxy().execute_kw(db, uid, password, model, method, args, kwargs)
+
+
+def _cache_get(key: str) -> Any:
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry and entry[0] > time.monotonic():
+            return copy.deepcopy(entry[1])
+        _cache.pop(key, None)
+        return _MISS
+
+
+def _cache_set(key: str, value: Any) -> None:
+    with _cache_lock:
+        if len(_cache) > 512:  # ponytail: crude bound, LRU if key space ever grows
+            _cache.clear()
+        _cache[key] = (time.monotonic() + _CACHE_TTL, copy.deepcopy(value))
+
+
+def _shared_execute(
+    model: str,
+    method: str,
+    args: list[Any],
+    kwargs: dict[str, Any],
+) -> Any:
+    key = None
+    if method == "search_read" and model in _CACHEABLE_MODELS and _CACHE_TTL > 0:
+        key = repr((model, args, kwargs))
+        cached = _cache_get(key)
+        if cached is not _MISS:
+            return cached
+    start = time.monotonic()
+    try:
+        result = _rpc(model, method, args, kwargs)
+    except _RETRYABLE:
+        _reset_connection()
+        result = _rpc(model, method, args, kwargs)
+    logger.debug(
+        "odoo %s.%s took %.0f ms", model, method, (time.monotonic() - start) * 1000
     )
+    if key is not None:
+        _cache_set(key, result)
+    return result
 
-    def execute(
-        model: str,
-        method: str,
-        args: list[Any],
-        kwargs: dict[str, Any],
-    ) -> Any:
-        return models.execute_kw(db, uid, password, model, method, args, kwargs)
 
-    return execute, uid
+def _connect() -> tuple[Execute, int]:
+    return _shared_execute, _get_uid()
 
 
 def _search_read(
@@ -148,38 +238,44 @@ def _find_purchase_order(
     the trailing 'PO09862' or '09862', so fall back to a suffix search there.
     """
     terms = _po_search_terms(po_number)
+    orders = _search_read(
+        execute,
+        "purchase.order",
+        [("name", "in", terms)],
+        fields,
+        limit=10,
+    )
     for term in terms:
-        orders = _search_read(
-            execute,
-            "purchase.order",
-            [("name", "=", term)],
-            fields,
-            limit=1,
-        )
-        if orders:
-            return orders[0]
+        for order in orders:
+            if order.get("name") == term:
+                return order
 
     suffix_terms = terms[1:] + terms[:1] if len(terms) > 1 else terms
+    domain: list[Any] = ["|"] * (len(suffix_terms) - 1)
+    domain += [("name", "=ilike", f"%{term}") for term in suffix_terms]
+    domain.append(("company_id", "=", PO_FALLBACK_COMPANY_ID))
+    orders = _search_read(
+        execute,
+        "purchase.order",
+        domain,
+        fields,
+        limit=10,
+        order="id desc",
+    )
     for term in suffix_terms:
-        orders = _search_read(
-            execute,
-            "purchase.order",
-            [
-                ("name", "=ilike", f"%{term}"),
-                ("company_id", "=", PO_FALLBACK_COMPANY_ID),
-            ],
-            fields,
-            limit=5,
-            order="id desc",
-        )
-        if len(orders) > 1:
-            names = ", ".join(str(order.get("name")) for order in orders)
+        matches = [
+            order
+            for order in orders
+            if str(order.get("name") or "").upper().endswith(term)
+        ]
+        if len(matches) > 1:
+            names = ", ".join(str(order.get("name")) for order in matches)
             raise OdooLookupError(
                 f"Purchase order '{po_number}' is ambiguous: {names}. "
                 "Enter the full PO number."
             )
-        if orders:
-            return orders[0]
+        if matches:
+            return matches[0]
 
     raise OdooLookupError(f"Purchase order '{po_number}' was not found.")
 
@@ -306,7 +402,7 @@ def fetch_panel_label_pdf(
     """Fetch the Panel Label PDF for the sale order linked to a purchase order.
 
     The PO's partner_ref holds the sale order name (e.g. 'S00334'); the label
-    is printed from that SO's Ready delivery orders.
+    is printed from that SO's outgoing delivery orders until they are Done.
     """
     normalized_po = po_number.strip()
     if not normalized_po:
@@ -344,13 +440,12 @@ def fetch_panel_label_pdf(
             f"Sale order '{so_number}' has no deliveries."
         )
 
-    # 'assigned' is what Odoo displays as Ready
     pickings = _search_read(
         execute,
         "stock.picking",
         [
             ("id", "in", picking_ids),
-            ("state", "=", "assigned"),
+            ("state", "!=", "done"),
             ("picking_type_id.code", "=", "outgoing"),
         ],
         ["id", "name", "state", "company_id"],
@@ -359,7 +454,7 @@ def fetch_panel_label_pdf(
     if not pickings:
         raise OdooLookupError(
             f"Sale order '{so_number}' has no delivery orders in "
-            "Ready state."
+            "a stage before Done."
         )
 
     if download is None:
