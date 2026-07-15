@@ -176,6 +176,20 @@
                 opacity: 0.58;
             }
 
+            button.secondary {
+                width: 100%;
+                min-height: 44px;
+                margin-top: 10px;
+                padding: 0 18px;
+                border: 1px solid var(--line);
+                background: var(--soft-accent);
+                color: var(--ink);
+            }
+
+            button.secondary:hover {
+                background: var(--line);
+            }
+
             #message {
                 margin-top: 22px;
                 padding: 13px 15px;
@@ -288,6 +302,31 @@
                 background: var(--primary);
             }
 
+            .top-link {
+                display: inline-flex;
+                align-items: center;
+                min-height: 44px;
+                padding: 0 14px;
+                border: 1px solid var(--line);
+                border-radius: 7px;
+                background: var(--soft-accent);
+                color: var(--primary);
+                font-weight: 750;
+                text-decoration: none;
+                white-space: nowrap;
+            }
+
+            .top-link:hover {
+                background: var(--line);
+                text-decoration: underline;
+            }
+
+            #message.ok {
+                border-color: var(--success-line);
+                background: var(--success-bg);
+                color: var(--ink);
+            }
+
             [hidden] {
                 display: none !important;
             }
@@ -311,6 +350,12 @@
                 .brand-logo {
                     width: min(280px, 100%);
                 }
+                .print-link {
+                    width: 100%;
+                }
+                .secondary-print-link {
+                    margin-left: 0;
+                }
             }
         </style>
     </head>
@@ -324,9 +369,16 @@
                         alt="Modula SW Enterprise"
                     />
                     <h1>Label Printing</h1>
+                    <a
+                        class="top-link"
+                        href="{{ url_for('queue_page') }}"
+                        target="_blank"
+                        rel="noopener"
+                        >Queue</a
+                    >
                 </header>
                 <p class="intro">
-                    Scan the PO, scan one or two SM codes, then print the matching label page.
+                    Scan or enter the PO and SM codes, then find the label.
                 </p>
 
                 <form id="lookup-form">
@@ -340,10 +392,15 @@
                                 placeholder="09862 or PO09862"
                                 list="po-suggestions"
                                 autocomplete="off"
+                                autofocus
                                 required
                             />
                             <datalist id="po-suggestions"></datalist>
-                            <button id="check-po-button" type="button">
+                            <button
+                                id="check-po-button"
+                                class="secondary"
+                                type="button"
+                            >
                                 Check PO
                             </button>
                             <span id="po-check-result" class="hint" hidden></span>
@@ -364,7 +421,7 @@
                         </div>
 
                         <div class="field">
-                            <label for="code-2">SM code 2</label>
+                            <label for="code-2">SM code 2 (optional)</label>
                             <input
                                 id="code-2"
                                 name="code2"
@@ -384,9 +441,13 @@
                                 required
                             />
                             <span class="hint">
-                                Fetch from Odoo or upload a PDF.
+                                Fetch from Odoo or choose a PDF.
                             </span>
-                            <button id="fetch-label-button" type="button">
+                            <button
+                                id="fetch-label-button"
+                                class="secondary"
+                                type="button"
+                            >
                                 Fetch Label PDF
                             </button>
                             <span
@@ -515,6 +576,34 @@
             // alternate 1 -> 2 -> 1 so the newest two scans are kept.
             const code1Input = document.querySelector("#code-1");
             const code2Input = document.querySelector("#code-2");
+
+            // Keep typed fields across navigation/reloads. The PDF and
+            // lookup results cannot be restored; fetch and search again.
+            const FIELDS_KEY = "barcode-print-fields";
+
+            function saveFields() {
+                localStorage.setItem(
+                    FIELDS_KEY,
+                    JSON.stringify({
+                        po: poInput.value,
+                        code1: code1Input.value,
+                        code2: code2Input.value,
+                    }),
+                );
+            }
+
+            try {
+                const saved =
+                    JSON.parse(localStorage.getItem(FIELDS_KEY)) || {};
+                poInput.value ||= saved.po || "";
+                code1Input.value ||= saved.code1 || "";
+                code2Input.value ||= saved.code2 || "";
+            } catch {
+                localStorage.removeItem(FIELDS_KEY);
+            }
+
+            code1Input.addEventListener("input", saveFields);
+            code2Input.addEventListener("input", saveFields);
             let scanBuffer = "";
             let scanLastKeyAt = 0;
             let scanFocusTarget = null;
@@ -532,6 +621,7 @@
                     [code1Input, code2Input][scanOverrideSlot].value = code;
                     scanOverrideSlot = 1 - scanOverrideSlot;
                 }
+                saveFields();
             }
 
             document.addEventListener("keydown", (event) => {
@@ -566,6 +656,7 @@
             });
 
             poInput.addEventListener("input", () => {
+                saveFields();
                 if (fetchedLabelFile) {
                     unlockFetchedLabel("PO changed. Fetch the label PDF again.");
                 }
@@ -612,6 +703,7 @@
             function clearOutput() {
                 message.hidden = true;
                 message.textContent = "";
+                message.className = "";
                 results.hidden = true;
                 results.replaceChildren();
             }
@@ -622,6 +714,65 @@
                 element.textContent = text;
                 parent.appendChild(element);
                 return element;
+            }
+
+            function showMessage(text, isError = false) {
+                message.textContent = text;
+                message.className = isError ? "" : "ok";
+                message.hidden = false;
+            }
+
+            async function addPrintedPartToQueue(match, quantity, printUrl) {
+                const response = await fetch("/api/print-queue", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        part_code: match.part_code,
+                        quantity,
+                    }),
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || "Could not add to queue.");
+                }
+            }
+
+            function queuedPrintLink(match, href, quantity, text, secondary = false) {
+                const link = document.createElement("a");
+                link.className = secondary
+                    ? "print-link secondary-print-link"
+                    : "print-link";
+                link.href = href;
+                link.target = "_blank";
+                link.rel = "noopener";
+                link.textContent = text;
+                link.addEventListener("click", async (event) => {
+                    event.preventDefault();
+                    const printWindow = window.open("about:blank", "_blank");
+                    if (printWindow) {
+                        printWindow.opener = null;
+                    }
+                    try {
+                        await addPrintedPartToQueue(match, quantity, href);
+                        showMessage(
+                            `Queued ${match.part_code} x ${quantity}. Open Queue to review or export.`,
+                        );
+                        if (printWindow) {
+                            printWindow.location = href;
+                        } else {
+                            window.open(href, "_blank", "noopener");
+                        }
+                    } catch (error) {
+                        if (printWindow) {
+                            printWindow.close();
+                        }
+                        showMessage(
+                            error.message || "Could not add to queue.",
+                            true,
+                        );
+                    }
+                });
+                return link;
             }
 
             function renderResults(data) {
@@ -664,23 +815,22 @@
                             ),
                             document.createElement("br"),
                         );
-                        const printLink = document.createElement("a");
-                        printLink.className = "print-link";
-                        printLink.href = match.document_match.print_url;
-                        printLink.target = "_blank";
-                        printLink.rel = "noopener";
-                        printLink.textContent = "Print";
+                        const printLink = queuedPrintLink(
+                            match,
+                            match.document_match.print_url,
+                            1,
+                            "Print",
+                        );
                         documentStatus.appendChild(printLink);
 
                         if (match.document_match.matching_page_count > 1) {
-                            const printAllLink = document.createElement("a");
-                            printAllLink.className =
-                                "print-link secondary-print-link";
-                            printAllLink.href =
-                                match.document_match.all_print_url;
-                            printAllLink.target = "_blank";
-                            printAllLink.rel = "noopener";
-                            printAllLink.textContent = `Print all (${match.document_match.matching_page_count})`;
+                            const printAllLink = queuedPrintLink(
+                                match,
+                                match.document_match.all_print_url,
+                                match.document_match.matching_page_count,
+                                `Print all (${match.document_match.matching_page_count})`,
+                                true,
+                            );
                             documentStatus.appendChild(printAllLink);
                         }
                     } else {
@@ -713,9 +863,6 @@
                 }
 
                 if (!renderedAny) {
-                    const checkedCodes = [
-                        ...new Set((data.results || []).map((item) => item.sm_code)),
-                    ];
                     const card = document.createElement("article");
                     card.className = "result-card";
                     addText(
@@ -743,8 +890,7 @@
                 const code1 = formData.get("code1").trim().toUpperCase();
                 const code2 = formData.get("code2").trim().toUpperCase();
                 if (!code1 && !code2) {
-                    message.textContent = "Enter at least one product code.";
-                    message.hidden = false;
+                    showMessage("Enter at least one product code.", true);
                     return;
                 }
 
@@ -768,8 +914,7 @@
                     }
                     renderResults(data);
                 } catch (error) {
-                    message.textContent = error.message || "Lookup failed.";
-                    message.hidden = false;
+                    showMessage(error.message || "Lookup failed.", true);
                 } finally {
                     button.disabled = false;
                     button.textContent = submitButtonText;

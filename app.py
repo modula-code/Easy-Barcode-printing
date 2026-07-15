@@ -1,6 +1,8 @@
 import io
 import os
 import xmlrpc.client
+import zipfile
+from html import escape
 
 from dotenv import load_dotenv
 from flask import (
@@ -30,6 +32,12 @@ from pdf_service import (  # noqa: E402
     get_print_artifact,
     prepare_matching_pages,
 )
+from queue_store import (  # noqa: E402
+    add_printed_part,
+    delete_printed_part,
+    list_printed_parts,
+    update_printed_part,
+)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = int(
@@ -40,6 +48,11 @@ app.config["MAX_CONTENT_LENGTH"] = int(
 @app.get("/")
 def index():
     return render_template("index.html")
+
+
+@app.get("/queue")
+def queue_page():
+    return render_template("queue.html")
 
 
 @app.get("/healthz")
@@ -115,7 +128,6 @@ def panel_label():
         download_name=f"panel-label-{result['po_number'].replace('/', '-')}.pdf",
         max_age=0,
     )
-    response.headers["X-Picking-Names"] = ", ".join(result["picking_names"])
     response.headers["X-So-Number"] = result["so_number"]
     response.headers["X-Po-Number"] = result["po_number"]
     return response
@@ -234,6 +246,105 @@ def lookup():
             match["document_match"] = document_match
 
     return jsonify(result)
+
+
+@app.get("/api/print-queue")
+def print_queue():
+    return jsonify(list_printed_parts())
+
+
+def _queue_xlsx(rows):
+    sheet_rows = [
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>Barcode</t></is></c>'
+        '<c r="B1" t="inlineStr"><is><t>Quantity</t></is></c></row>'
+    ]
+    for row_number, item in enumerate(rows, 2):
+        sheet_rows.append(
+            f'<row r="{row_number}">'
+            f'<c r="A{row_number}" t="inlineStr"><is><t>{escape(str(item.get("part_code", "")))}</t></is></c>'
+            f'<c r="B{row_number}"><v>{int(item.get("quantity") or 0)}</v></c>'
+            "</row>"
+        )
+
+    files = {
+        "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>""",
+        "_rels/.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>""",
+        "xl/workbook.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Queue" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""",
+        "xl/_rels/workbook.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>""",
+        "xl/worksheets/sheet1.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"""
+        + "".join(sheet_rows)
+        + "</sheetData></worksheet>",
+    }
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as workbook:
+        for name, content in files.items():
+            workbook.writestr(name, content)
+    out.seek(0)
+    return out
+
+
+@app.get("/api/print-queue/export.xlsx")
+def export_print_queue_xlsx():
+    rows = list_printed_parts()["items"]
+    return send_file(
+        _queue_xlsx(rows),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="print-queue.xlsx",
+        max_age=0,
+    )
+
+
+@app.post("/api/print-queue")
+def add_print_queue_item():
+    payload = request.get_json(silent=True) or {}
+    try:
+        item = add_printed_part(
+            str(payload.get("part_code", "")),
+            payload.get("quantity", 1),
+        )
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(item=item), 201
+
+
+@app.put("/api/print-queue/<int:item_id>")
+def update_print_queue_item(item_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        item = update_printed_part(
+            item_id,
+            str(payload.get("part_code", "")),
+            payload.get("quantity", 1),
+        )
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(item=item)
+
+
+@app.delete("/api/print-queue/<int:item_id>")
+def delete_print_queue_item(item_id):
+    try:
+        delete_printed_part(item_id)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(ok=True)
 
 
 @app.get("/print/<token>")

@@ -58,15 +58,22 @@ ODOO_DB
 ODOO_USERNAME
 ODOO_PASSWORD
 ODOO_TIMEOUT=20
+ODOO_REPORT_TIMEOUT=300
 ODOO_CACHE_TTL=300
 MAX_UPLOAD_SIZE_MB=20
+PRINT_QUEUE_DB_PATH=printed_parts.sqlite3
 PORT=8000
 GUNICORN_THREADS=4
-GUNICORN_TIMEOUT=120
+GUNICORN_TIMEOUT=360
 ```
 
 Keep one Gunicorn worker because generated print artifacts are held in process
 memory. The supplied configuration uses one worker and four threads.
+
+## Print queue
+
+Printed labels are stored locally in `PRINT_QUEUE_DB_PATH`. The queue page lists
+them for editing or removal and can export the current queue as XLSX.
 
 ## API
 
@@ -80,4 +87,5 @@ memory. The supplied configuration uses one worker and four threads.
 ```
 
 The Odoo user must have read access to `purchase.order`, `purchase.order.line`,
-`mrp.bom`, `mrp.bom.line`, `product.product`, and `product.template`.
+`mrp.bom`, `mrp.bom.line`, `product.product`, `product.template`, `sale.order`,
+and `stock.picking`.

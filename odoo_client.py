@@ -384,8 +384,14 @@ def _download_report_pdf(
         report_url += "?context=" + urllib.parse.quote(
             json.dumps({"allowed_company_ids": list(company_ids)})
         )
-    # ponytail: report rendering is slow on SaaS, floor the timeout at 120s
-    with opener.open(report_url, timeout=max(timeout, 120)) as response:
+    try:
+        report_timeout = float(os.getenv("ODOO_REPORT_TIMEOUT", "300"))
+    except ValueError as exc:
+        raise OdooConfigurationError(
+            "ODOO_REPORT_TIMEOUT must be a number"
+        ) from exc
+    # ponytail: Odoo renders large label batches synchronously; keep this tunable
+    with opener.open(report_url, timeout=max(timeout, report_timeout)) as response:
         pdf_bytes = response.read()
     if not pdf_bytes.startswith(b"%PDF-"):
         raise OdooLookupError(
@@ -449,7 +455,7 @@ def fetch_panel_label_pdf(
             ("state", "!=", "done"),
             ("picking_type_id.code", "=", "outgoing"),
         ],
-        ["id", "name", "state", "company_id"],
+        ["id", "state", "company_id"],
         order="id",
     )
     if not pickings:
@@ -476,7 +482,6 @@ def fetch_panel_label_pdf(
     return {
         "po_number": order.get("name") or normalized_po,
         "so_number": so_number,
-        "picking_names": [picking["name"] for picking in pickings],
         "pdf_bytes": pdf_bytes,
     }
 

@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Scanned Barcodes</title>
+        <style>
+            :root {
+                color-scheme: light;
+                --ink: #4f372f;
+                --muted: #6b4b41;
+                --line: #d8c8c1;
+                --surface: #fffdfb;
+                --page: #f1e6dd;
+                --soft: #f3e9e4;
+                --error: #8c2626;
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                margin: 0;
+                min-height: 100vh;
+                background: var(--page);
+                color: var(--ink);
+                font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+            }
+
+            main {
+                width: min(900px, calc(100% - 24px));
+                margin: 24px auto;
+            }
+
+            .panel {
+                padding: clamp(18px, 4vw, 28px);
+                border: 1px solid var(--line);
+                border-radius: 10px;
+                background: var(--surface);
+                box-shadow: 0 8px 24px rgba(79, 55, 47, 0.1);
+            }
+
+            header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
+                margin-bottom: 20px;
+            }
+
+            h1 {
+                margin: 0;
+                font-size: clamp(1.5rem, 4vw, 2rem);
+            }
+
+            .export,
+            button {
+                min-height: 46px;
+                padding: 0 18px;
+                border: 0;
+                border-radius: 8px;
+                background: var(--ink);
+                color: #fff;
+                font: inherit;
+                font-weight: 750;
+                cursor: pointer;
+            }
+
+            .export {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                text-decoration: none;
+                white-space: nowrap;
+            }
+
+            button:hover,
+            .export:hover {
+                background: var(--muted);
+            }
+
+            button:disabled {
+                cursor: wait;
+                opacity: 0.6;
+            }
+
+            button.remove {
+                border: 1px solid #dba6a6;
+                background: #fff1f1;
+                color: var(--error);
+            }
+
+            #status {
+                min-height: 1.4em;
+                margin: 0 0 10px;
+                color: var(--muted);
+            }
+
+            #status.error {
+                color: var(--error);
+            }
+
+            #list {
+                display: grid;
+                gap: 10px;
+            }
+
+            .row {
+                display: grid;
+                grid-template-columns: minmax(180px, 1fr) 110px auto;
+                align-items: end;
+                gap: 10px;
+                padding: 14px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: var(--surface);
+            }
+
+            label {
+                display: grid;
+                gap: 6px;
+                color: var(--muted);
+                font-size: 0.82rem;
+                font-weight: 700;
+            }
+
+            input {
+                width: 100%;
+                min-height: 46px;
+                padding: 10px 12px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: #fff;
+                color: var(--ink);
+                font: inherit;
+                font-size: 1rem;
+            }
+
+            input[type="text"] {
+                text-transform: uppercase;
+            }
+
+            input:focus {
+                outline: 3px solid rgba(107, 75, 65, 0.18);
+                border-color: var(--ink);
+            }
+
+            .actions {
+                display: flex;
+                gap: 8px;
+            }
+
+            .empty {
+                margin: 0;
+                padding: 28px 14px;
+                border: 1px dashed var(--line);
+                border-radius: 8px;
+                background: var(--soft);
+                color: var(--muted);
+                text-align: center;
+            }
+
+            @media (max-width: 640px) {
+                header,
+                .row {
+                    grid-template-columns: 1fr;
+                }
+
+                header {
+                    display: grid;
+                }
+
+                .export,
+                .actions button {
+                    width: 100%;
+                }
+
+                .actions {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <main>
+            <section class="panel">
+                <header>
+                    <h1>Scanned Barcodes</h1>
+                    <a
+                        class="export"
+                        href="{{ url_for('export_print_queue_xlsx') }}"
+                    >Export XLSX</a>
+                </header>
+                <p id="status" aria-live="polite"></p>
+                <div id="list" aria-live="polite"></div>
+            </section>
+        </main>
+
+        <script>
+            const list = document.querySelector("#list");
+            const statusText = document.querySelector("#status");
+
+            function showStatus(message, error = false) {
+                statusText.textContent = message;
+                statusText.className = error ? "error" : "";
+            }
+
+            async function requestJson(url, options) {
+                const response = await fetch(url, options);
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || "Request failed.");
+                }
+                return data;
+            }
+
+            function field(labelText, type, value) {
+                const label = document.createElement("label");
+                const caption = document.createElement("span");
+                const input = document.createElement("input");
+                caption.textContent = labelText;
+                input.type = type;
+                input.value = value;
+                if (type === "number") {
+                    input.min = "1";
+                    input.max = "500";
+                    input.step = "1";
+                }
+                label.append(caption, input);
+                return { label, input };
+            }
+
+            function render(items) {
+                list.replaceChildren();
+                if (!items.length) {
+                    const empty = document.createElement("p");
+                    empty.className = "empty";
+                    empty.textContent = "No barcodes scanned yet.";
+                    list.appendChild(empty);
+                    return;
+                }
+
+                for (const item of items) {
+                    const row = document.createElement("div");
+                    row.className = "row";
+
+                    const barcode = field("Barcode", "text", item.part_code);
+                    const quantity = field("Quantity", "number", item.quantity);
+                    const actions = document.createElement("div");
+                    const save = document.createElement("button");
+                    const remove = document.createElement("button");
+                    actions.className = "actions";
+                    save.type = remove.type = "button";
+                    save.textContent = "Save";
+                    remove.textContent = "Remove";
+                    remove.className = "remove";
+
+                    save.addEventListener("click", async () => {
+                        const code = barcode.input.value.trim().toUpperCase();
+                        const qty = Number(quantity.input.value);
+                        if (!code || !Number.isInteger(qty) || qty < 1 || qty > 500) {
+                            showStatus("Enter a barcode and quantity from 1 to 500.", true);
+                            return;
+                        }
+                        save.disabled = true;
+                        try {
+                            await requestJson(`/api/print-queue/${item.id}`, {
+                                method: "PUT",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ part_code: code, quantity: qty }),
+                            });
+                            showStatus(`Saved ${code} x ${qty}.`);
+                            await load();
+                        } catch (error) {
+                            showStatus(error.message, true);
+                        } finally {
+                            save.disabled = false;
+                        }
+                    });
+
+                    remove.addEventListener("click", async () => {
+                        if (!confirm(`Remove ${item.part_code} from the queue?`)) return;
+                        remove.disabled = true;
+                        try {
+                            await requestJson(`/api/print-queue/${item.id}`, {
+                                method: "DELETE",
+                            });
+                            showStatus(`Removed ${item.part_code}.`);
+                            await load();
+                        } catch (error) {
+                            showStatus(error.message, true);
+                        } finally {
+                            remove.disabled = false;
+                        }
+                    });
+
+                    actions.append(save, remove);
+                    row.append(barcode.label, quantity.label, actions);
+                    list.appendChild(row);
+                }
+            }
+
+            async function load() {
+                const data = await requestJson("/api/print-queue");
+                render(data.items || []);
+            }
+
+            load().catch((error) => showStatus(error.message, true));
+        </script>
+    </body>
+</html>
