@@ -486,6 +486,27 @@ def fetch_panel_label_pdf(
     }
 
 
+def normalize_sm_code(value: str) -> str:
+    parts = [part.strip().upper() for part in str(value or "").split("-")]
+    had_sm = bool(parts and parts[0] == "SM")
+    if had_sm:
+        parts = parts[1:]
+    if len(parts) != 2:
+        return ("SM-" if had_sm else "") + "-".join(parts)
+
+    def is_main_code(part: str) -> bool:
+        return part.isdigit() or (
+            len(part) > 1 and part[0].isalpha() and part[1:].isdigit()
+        )
+
+    first, second = parts
+    if is_main_code(second) and len(first) == 2 and first.isalpha():
+        first, second = second, first
+    if is_main_code(first) and len(second) == 2 and second.isalpha():
+        return f"SM-{first}-{second}"
+    return ("SM-" if had_sm else "") + "-".join(parts)
+
+
 def lookup_part_codes(
     po_number: str,
     sm_codes: list[str],
@@ -504,7 +525,7 @@ def lookup_part_codes(
     """
     normalized_po = po_number.strip()
     normalized_codes = [
-        code.strip().upper() for code in sm_codes if code.strip()
+        normalize_sm_code(code) for code in sm_codes if code.strip()
     ]
     if not normalized_po:
         raise ValueError("PO number is required.")

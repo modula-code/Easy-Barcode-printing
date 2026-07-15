@@ -610,7 +610,30 @@
             let scanFocusValue = "";
             let scanOverrideSlot = 0;
 
+            function normalizeSmCode(value) {
+                let parts = String(value || "")
+                    .toUpperCase()
+                    .split("-")
+                    .map((part) => part.trim());
+                const hadSm = parts[0] === "SM";
+                if (hadSm) parts = parts.slice(1);
+                if (parts.length !== 2) {
+                    return `${hadSm ? "SM-" : ""}${parts.join("-")}`;
+                }
+
+                const isMainCode = (part) =>
+                    /^\d+$/.test(part) || /^[A-Z]\d+$/.test(part);
+                let [first, second] = parts;
+                if (isMainCode(second) && /^[A-Z]{2}$/.test(first)) {
+                    [first, second] = [second, first];
+                }
+                return isMainCode(first) && /^[A-Z]{2}$/.test(second)
+                    ? `SM-${first}-${second}`
+                    : `${hadSm ? "SM-" : ""}${parts.join("-")}`;
+            }
+
             function fillScannedCode(code) {
+                code = normalizeSmCode(code);
                 if (!code1Input.value) {
                     code1Input.value = code;
                     scanOverrideSlot = 0;
@@ -887,8 +910,8 @@
                 if ((!uploaded || !uploaded.size) && fetchedLabelFile) {
                     formData.set("document", fetchedLabelFile);
                 }
-                const code1 = formData.get("code1").trim().toUpperCase();
-                const code2 = formData.get("code2").trim().toUpperCase();
+                const code1 = normalizeSmCode(formData.get("code1"));
+                const code2 = normalizeSmCode(formData.get("code2"));
                 if (!code1 && !code2) {
                     showMessage("Enter at least one product code.", true);
                     return;
@@ -902,6 +925,9 @@
                 );
                 formData.set("code1", code1);
                 formData.set("code2", code2);
+                code1Input.value = code1;
+                code2Input.value = code2;
+                saveFields();
 
                 try {
                     const response = await fetch("/api/lookup", {
