@@ -3,7 +3,7 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Scanned Barcodes</title>
+        <title>Barcode Queue</title>
         <style>
             :root {
                 color-scheme: light;
@@ -16,9 +16,7 @@
                 --error: #8c2626;
             }
 
-            * {
-                box-sizing: border-box;
-            }
+            * { box-sizing: border-box; }
 
             body {
                 margin: 0;
@@ -29,7 +27,7 @@
             }
 
             main {
-                width: min(900px, calc(100% - 24px));
+                width: min(1050px, calc(100% - 24px));
                 margin: 24px auto;
             }
 
@@ -41,12 +39,17 @@
                 box-shadow: 0 8px 24px rgba(79, 55, 47, 0.1);
             }
 
-            header {
+            header,
+            .toolbar,
+            .actions {
                 display: flex;
                 align-items: center;
+                gap: 10px;
+            }
+
+            header {
                 justify-content: space-between;
-                gap: 16px;
-                margin-bottom: 20px;
+                margin-bottom: 18px;
             }
 
             h1 {
@@ -54,15 +57,61 @@
                 font-size: clamp(1.5rem, 4vw, 2rem);
             }
 
-            .export,
-            button {
+            .date-box {
+                display: grid;
+                grid-template-columns: minmax(180px, 260px) 1fr;
+                align-items: end;
+                gap: 12px;
+                margin-bottom: 16px;
+                padding: 14px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: var(--soft);
+            }
+
+            label {
+                display: grid;
+                gap: 6px;
+                color: var(--muted);
+                font-size: 0.82rem;
+                font-weight: 700;
+            }
+
+            input,
+            button,
+            .export {
                 min-height: 46px;
+                border-radius: 8px;
+                font: inherit;
+            }
+
+            input {
+                width: 100%;
+                padding: 10px 12px;
+                border: 1px solid var(--line);
+                background: #fff;
+                color: var(--ink);
+                font-size: 1rem;
+            }
+
+            input[type="text"] { text-transform: uppercase; }
+
+            input:focus {
+                outline: 3px solid rgba(107, 75, 65, 0.18);
+                border-color: var(--ink);
+            }
+
+            input:disabled {
+                background: var(--soft);
+                opacity: 1;
+            }
+
+            button,
+            .export {
                 padding: 0 18px;
                 border: 0;
-                border-radius: 8px;
                 background: var(--ink);
                 color: #fff;
-                font: inherit;
                 font-weight: 750;
                 cursor: pointer;
             }
@@ -76,14 +125,8 @@
             }
 
             button:hover,
-            .export:hover {
-                background: var(--muted);
-            }
-
-            button:disabled {
-                cursor: wait;
-                opacity: 0.6;
-            }
+            .export:hover { background: var(--muted); }
+            button:disabled { cursor: wait; opacity: 0.6; }
 
             button.remove {
                 border: 1px solid #dba6a6;
@@ -97,58 +140,18 @@
                 color: var(--muted);
             }
 
-            #status.error {
-                color: var(--error);
-            }
-
-            #list {
-                display: grid;
-                gap: 10px;
-            }
+            #status.error { color: var(--error); }
+            #list { display: grid; gap: 10px; }
 
             .row {
                 display: grid;
-                grid-template-columns: minmax(180px, 1fr) 110px auto;
+                grid-template-columns: minmax(150px, 0.8fr) minmax(180px, 1fr) 100px auto;
                 align-items: end;
                 gap: 10px;
                 padding: 14px;
                 border: 1px solid var(--line);
                 border-radius: 8px;
                 background: var(--surface);
-            }
-
-            label {
-                display: grid;
-                gap: 6px;
-                color: var(--muted);
-                font-size: 0.82rem;
-                font-weight: 700;
-            }
-
-            input {
-                width: 100%;
-                min-height: 46px;
-                padding: 10px 12px;
-                border: 1px solid var(--line);
-                border-radius: 8px;
-                background: #fff;
-                color: var(--ink);
-                font: inherit;
-                font-size: 1rem;
-            }
-
-            input[type="text"] {
-                text-transform: uppercase;
-            }
-
-            input:focus {
-                outline: 3px solid rgba(107, 75, 65, 0.18);
-                border-color: var(--ink);
-            }
-
-            .actions {
-                display: flex;
-                gap: 8px;
             }
 
             .empty {
@@ -161,25 +164,20 @@
                 text-align: center;
             }
 
-            @media (max-width: 640px) {
+            [hidden] { display: none !important; }
+
+            @media (max-width: 760px) {
                 header,
+                .date-box,
                 .row {
+                    display: grid;
                     grid-template-columns: 1fr;
                 }
 
-                header {
-                    display: grid;
-                }
-
-                .export,
-                .actions button {
-                    width: 100%;
-                }
-
-                .actions {
-                    display: grid;
-                    grid-template-columns: 1fr 1fr;
-                }
+                .toolbar { display: grid; grid-template-columns: 1fr 1fr; }
+                .toolbar > *,
+                .actions button { width: 100%; }
+                .actions { display: grid; grid-template-columns: 1fr 1fr; }
             }
         </style>
     </head>
@@ -187,12 +185,25 @@
         <main>
             <section class="panel">
                 <header>
-                    <h1>Scanned Barcodes</h1>
-                    <a
-                        class="export"
-                        href="{{ url_for('export_print_queue_xlsx') }}"
-                    >Export XLSX</a>
+                    <h1>Barcode Queue</h1>
+                    <div class="toolbar">
+                        <a class="export" href="/">Back to Label Printing</a>
+                        <a class="export" href="/history">History</a>
+                        <a id="export-link" class="export" href="#">Export XLSX</a>
+                        <button id="clear-button" class="remove" type="button">
+                            Clear today's queue
+                        </button>
+                    </div>
                 </header>
+
+                <div class="date-box">
+                    <label>
+                        Queue date
+                        <input id="queue-date" type="date" />
+                    </label>
+                    <span id="date-note">Today’s shared queue</span>
+                </div>
+
                 <p id="status" aria-live="polite"></p>
                 <div id="list" aria-live="polite"></div>
             </section>
@@ -201,6 +212,11 @@
         <script>
             const list = document.querySelector("#list");
             const statusText = document.querySelector("#status");
+            const dateInput = document.querySelector("#queue-date");
+            const dateNote = document.querySelector("#date-note");
+            const exportLink = document.querySelector("#export-link");
+            const clearButton = document.querySelector("#clear-button");
+            let queueData = null;
 
             function showStatus(message, error = false) {
                 statusText.textContent = message;
@@ -210,19 +226,18 @@
             async function requestJson(url, options) {
                 const response = await fetch(url, options);
                 const data = await response.json();
-                if (!response.ok) {
-                    throw new Error(data.error || "Request failed.");
-                }
+                if (!response.ok) throw new Error(data.error || "Request failed.");
                 return data;
             }
 
-            function field(labelText, type, value) {
+            function field(labelText, type, value, disabled) {
                 const label = document.createElement("label");
                 const caption = document.createElement("span");
                 const input = document.createElement("input");
                 caption.textContent = labelText;
                 input.type = type;
-                input.value = value;
+                input.value = value || "";
+                input.disabled = disabled;
                 if (type === "number") {
                     input.min = "1";
                     input.max = "500";
@@ -232,82 +247,116 @@
                 return { label, input };
             }
 
-            function render(items) {
+            function render(data) {
+                queueData = data;
                 list.replaceChildren();
-                if (!items.length) {
+                const archived = data.date !== data.today;
+                dateInput.value = data.date;
+                dateInput.max = data.today;
+                dateNote.textContent = archived
+                    ? "Archived queue — view and export only"
+                    : "Today’s shared queue";
+                clearButton.hidden = archived;
+                exportLink.href = `/api/print-queue/export.xlsx?date=${encodeURIComponent(data.date)}`;
+
+                if (!data.items.length) {
                     const empty = document.createElement("p");
                     empty.className = "empty";
-                    empty.textContent = "No barcodes scanned yet.";
+                    empty.textContent = archived
+                        ? "No archived barcodes for this date."
+                        : "No barcodes scanned today.";
                     list.appendChild(empty);
                     return;
                 }
 
-                for (const item of items) {
+                for (const item of data.items) {
                     const row = document.createElement("div");
                     row.className = "row";
+                    const po = field("PO number", "text", item.po_number, archived);
+                    const barcode = field("Barcode", "text", item.part_code, archived);
+                    const quantity = field("Quantity", "number", item.quantity, archived);
+                    row.append(po.label, barcode.label, quantity.label);
 
-                    const barcode = field("Barcode", "text", item.part_code);
-                    const quantity = field("Quantity", "number", item.quantity);
-                    const actions = document.createElement("div");
-                    const save = document.createElement("button");
-                    const remove = document.createElement("button");
-                    actions.className = "actions";
-                    save.type = remove.type = "button";
-                    save.textContent = "Save";
-                    remove.textContent = "Remove";
-                    remove.className = "remove";
+                    if (!archived) {
+                        const actions = document.createElement("div");
+                        const save = document.createElement("button");
+                        const remove = document.createElement("button");
+                        actions.className = "actions";
+                        save.type = remove.type = "button";
+                        save.textContent = "Save";
+                        remove.textContent = "Remove";
+                        remove.className = "remove";
 
-                    save.addEventListener("click", async () => {
-                        const code = barcode.input.value.trim().toUpperCase();
-                        const qty = Number(quantity.input.value);
-                        if (!code || !Number.isInteger(qty) || qty < 1 || qty > 500) {
-                            showStatus("Enter a barcode and quantity from 1 to 500.", true);
-                            return;
-                        }
-                        save.disabled = true;
-                        try {
-                            await requestJson(`/api/print-queue/${item.id}`, {
-                                method: "PUT",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ part_code: code, quantity: qty }),
-                            });
-                            showStatus(`Saved ${code} x ${qty}.`);
-                            await load();
-                        } catch (error) {
-                            showStatus(error.message, true);
-                        } finally {
-                            save.disabled = false;
-                        }
-                    });
+                        save.addEventListener("click", async () => {
+                            const nextPo = po.input.value.trim().toUpperCase();
+                            const code = barcode.input.value.trim().toUpperCase();
+                            const qty = Number(quantity.input.value);
+                            if (!nextPo || !code || !Number.isInteger(qty) || qty < 1 || qty > 500) {
+                                showStatus("Enter a PO, barcode, and quantity from 1 to 500.", true);
+                                return;
+                            }
+                            save.disabled = true;
+                            try {
+                                await requestJson(`/api/print-queue/${item.id}`, {
+                                    method: "PUT",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ po_number: nextPo, part_code: code, quantity: qty }),
+                                });
+                                showStatus(`Saved ${nextPo} — ${code} x ${qty}.`);
+                                await load(data.date);
+                            } catch (error) {
+                                showStatus(error.message, true);
+                            } finally {
+                                save.disabled = false;
+                            }
+                        });
 
-                    remove.addEventListener("click", async () => {
-                        if (!confirm(`Remove ${item.part_code} from the queue?`)) return;
-                        remove.disabled = true;
-                        try {
-                            await requestJson(`/api/print-queue/${item.id}`, {
-                                method: "DELETE",
-                            });
-                            showStatus(`Removed ${item.part_code}.`);
-                            await load();
-                        } catch (error) {
-                            showStatus(error.message, true);
-                        } finally {
-                            remove.disabled = false;
-                        }
-                    });
-
-                    actions.append(save, remove);
-                    row.append(barcode.label, quantity.label, actions);
+                        remove.addEventListener("click", async () => {
+                            if (!confirm(`Remove ${item.part_code} for ${item.po_number}?`)) return;
+                            remove.disabled = true;
+                            try {
+                                await requestJson(`/api/print-queue/${item.id}`, { method: "DELETE" });
+                                showStatus(`Removed ${item.part_code}.`);
+                                await load(data.date);
+                            } catch (error) {
+                                showStatus(error.message, true);
+                            } finally {
+                                remove.disabled = false;
+                            }
+                        });
+                        actions.append(save, remove);
+                        row.appendChild(actions);
+                    }
                     list.appendChild(row);
                 }
             }
 
-            async function load() {
-                const data = await requestJson("/api/print-queue");
-                render(data.items || []);
+            async function load(selectedDate = "") {
+                const query = selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : "";
+                render(await requestJson(`/api/print-queue${query}`));
             }
 
-            load().catch((error) => showStatus(error.message, true));
+            dateInput.addEventListener("change", () => {
+                history.replaceState(null, "", `?date=${encodeURIComponent(dateInput.value)}`);
+                load(dateInput.value).catch((error) => showStatus(error.message, true));
+            });
+
+            clearButton.addEventListener("click", async () => {
+                if (!confirm("Clear every barcode in today's queue? This cannot be undone.")) return;
+                clearButton.disabled = true;
+                try {
+                    const data = await requestJson("/api/print-queue", { method: "DELETE" });
+                    showStatus(`Cleared ${data.cleared} queue rows.`);
+                    await load();
+                } catch (error) {
+                    showStatus(error.message, true);
+                } finally {
+                    clearButton.disabled = false;
+                }
+            });
+
+            const initialDate = new URLSearchParams(location.search).get("date") || "";
+            load(initialDate).catch((error) => showStatus(error.message, true));
         </script>
     </body>
 </html>

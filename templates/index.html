@@ -42,7 +42,7 @@
             }
 
             main {
-                width: min(720px, calc(100% - 20px));
+                width: min(800px, calc(100% - 20px));
                 margin: 24px auto;
             }
 
@@ -89,7 +89,6 @@
                 gap: 14px;
             }
 
-            .field:first-child,
             .field.full-width {
                 grid-column: 1 / -1;
             }
@@ -101,7 +100,8 @@
                 font-weight: 700;
             }
 
-            input {
+            input,
+            select {
                 width: 100%;
                 min-height: 56px;
                 padding: 12px 14px;
@@ -136,7 +136,8 @@
                 font-weight: 650;
             }
 
-            input:focus {
+            input:focus,
+            select:focus {
                 outline: none;
                 border-color: var(--primary);
                 box-shadow: 0 0 0 3px rgba(107, 75, 65, 0.18);
@@ -331,7 +332,7 @@
                 display: none !important;
             }
 
-            @media (max-width: 580px) {
+            @media (max-width: 760px) {
                 main {
                     margin: 24px auto;
                 }
@@ -339,7 +340,6 @@
                 .match {
                     grid-template-columns: 1fr;
                 }
-                .field:first-child,
                 .field.full-width {
                     grid-column: auto;
                 }
@@ -376,6 +376,13 @@
                         rel="noopener"
                         >Queue</a
                     >
+                    <a
+                        class="top-link"
+                        href="{{ url_for('history_page') }}"
+                        target="_blank"
+                        rel="noopener"
+                        >History</a
+                    >
                 </header>
                 <p class="intro">
                     Scan or enter the PO and SM codes, then find the label.
@@ -383,7 +390,7 @@
 
                 <form id="lookup-form">
                     <div class="form-grid">
-                        <div class="field">
+                        <div class="field full-width">
                             <label for="po-number">PO number</label>
                             <input
                                 id="po-number"
@@ -501,6 +508,7 @@
                 }
             }
 
+
             async function loadPoSuggestions() {
                 const query = poInput.value.trim().toUpperCase();
                 poSuggestions.replaceChildren();
@@ -561,8 +569,7 @@
                     fetchLabelButton.textContent = "Label PDF fetched";
                 } catch (error) {
                     unlockFetchedLabel();
-                    fetchLabelResult.textContent =
-                        error.message || "Fetch failed.";
+                    fetchLabelResult.textContent = error.message || "Fetch failed.";
                 } finally {
                     if (!fetchedLabelFile) {
                         fetchLabelButton.disabled = false;
@@ -577,8 +584,7 @@
             const code1Input = document.querySelector("#code-1");
             const code2Input = document.querySelector("#code-2");
 
-            // Keep typed fields across navigation/reloads. The PDF and
-            // lookup results cannot be restored; fetch and search again.
+            // Keep scanned codes across navigation and reloads.
             const FIELDS_KEY = "barcode-print-fields";
 
             function saveFields() {
@@ -680,6 +686,7 @@
 
             poInput.addEventListener("input", () => {
                 saveFields();
+                clearActivePlan();
                 if (fetchedLabelFile) {
                     unlockFetchedLabel("PO changed. Fetch the label PDF again.");
                 }
@@ -693,11 +700,9 @@
                 }
             });
 
+
             checkPoButton.addEventListener("click", async () => {
-                const poNumber = document
-                    .querySelector("#po-number")
-                    .value.trim()
-                    .toUpperCase();
+                const poNumber = poInput.value.trim().toUpperCase();
                 if (!poNumber) {
                     poCheckResult.hidden = false;
                     poCheckResult.textContent = "Enter a PO number first.";
@@ -750,6 +755,7 @@
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
+                        po_number: poInput.value.trim().toUpperCase(),
                         part_code: match.part_code,
                         quantity,
                     }),

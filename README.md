@@ -61,7 +61,8 @@ ODOO_TIMEOUT=20
 ODOO_REPORT_TIMEOUT=300
 ODOO_CACHE_TTL=300
 MAX_UPLOAD_SIZE_MB=20
-PRINT_QUEUE_DB_PATH=printed_parts.sqlite3
+PRINT_QUEUE_DB_PATH=/data/printed_parts.sqlite3
+APP_TIMEZONE=Asia/Kolkata
 PORT=8000
 GUNICORN_THREADS=4
 GUNICORN_TIMEOUT=360
@@ -72,8 +73,17 @@ memory. The supplied configuration uses one worker and four threads.
 
 ## Print queue
 
-Printed labels are stored locally in `PRINT_QUEUE_DB_PATH`. The queue page lists
-them for editing or removal and can export the current queue as XLSX.
+Today's PO label PDFs and printed barcodes are stored in the SQLite file at
+`PRINT_QUEUE_DB_PATH`. Browser refreshes do not clear this data. Queue rows are
+grouped by PO and date; a new day starts with an empty active queue while older
+dates remain available from the queue date picker for viewing and XLSX export.
+Add or replace today's PO label PDFs on `/plans`; operators select the active PO
+from the sidebar on the main print page.
+
+For Coolify, mount a persistent volume at `/data` and set
+`PRINT_QUEUE_DB_PATH=/data/printed_parts.sqlite3`. Without that volume, a
+container replacement can remove the SQLite file even though normal page
+refreshes and app restarts do not.
 
 ## API
 

@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Queue History</title>
+        <style>
+            :root {
+                color-scheme: light;
+                --ink: #4f372f;
+                --muted: #6b4b41;
+                --line: #d8c8c1;
+                --surface: #fffdfb;
+                --page: #f1e6dd;
+                --soft: #f3e9e4;
+            }
+
+            * { box-sizing: border-box; }
+
+            body {
+                margin: 0;
+                min-height: 100vh;
+                background: var(--page);
+                color: var(--ink);
+                font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+            }
+
+            main {
+                width: min(800px, calc(100% - 24px));
+                margin: 24px auto;
+            }
+
+            .panel {
+                padding: clamp(18px, 4vw, 28px);
+                border: 1px solid var(--line);
+                border-radius: 10px;
+                background: var(--surface);
+                box-shadow: 0 8px 24px rgba(79, 55, 47, 0.1);
+            }
+
+            header,
+            .toolbar {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+
+            header {
+                justify-content: space-between;
+                margin-bottom: 18px;
+            }
+
+            h1 {
+                margin: 0;
+                font-size: clamp(1.5rem, 4vw, 2rem);
+            }
+
+            .export {
+                padding: 0 18px;
+                min-height: 46px;
+                border: 0;
+                border-radius: 8px;
+                background: var(--ink);
+                color: #fff;
+                font-weight: 750;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                text-decoration: none;
+                white-space: nowrap;
+                font: inherit;
+            }
+
+            .export:hover { background: var(--muted); }
+
+            .date-list {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                margin-top: 16px;
+            }
+
+            .date-link {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 16px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: var(--soft);
+                color: var(--ink);
+                text-decoration: none;
+                font-weight: 600;
+                transition: background 0.2s;
+            }
+
+            .date-link:hover {
+                background: var(--line);
+            }
+
+            #status {
+                margin: 0;
+                color: var(--muted);
+            }
+
+            .empty {
+                margin: 16px 0 0;
+                padding: 28px 14px;
+                border: 1px dashed var(--line);
+                border-radius: 8px;
+                background: var(--soft);
+                color: var(--muted);
+                text-align: center;
+            }
+
+            @media (max-width: 760px) {
+                header {
+                    flex-direction: column;
+                    align-items: stretch;
+                }
+                .toolbar { flex-direction: column; }
+                .toolbar > * { width: 100%; }
+            }
+        </style>
+    </head>
+    <body>
+        <main>
+            <section class="panel">
+                <header>
+                    <h1>Queue History</h1>
+                    <div class="toolbar">
+                        <a class="export" href="/">Back to Label Printing</a>
+                        <a class="export" href="/queue">Today's Queue</a>
+                    </div>
+                </header>
+                <p id="status" aria-live="polite">Loading history...</p>
+                <div id="date-list" class="date-list"></div>
+            </section>
+        </main>
+        <script>
+            async function loadHistory() {
+                const list = document.getElementById("date-list");
+                const status = document.getElementById("status");
+                
+                try {
+                    const response = await fetch("/api/history");
+                    const data = await response.json();
+                    
+                    if (!response.ok) throw new Error(data.error || "Failed to load history.");
+                    
+                    status.textContent = "";
+                    list.innerHTML = "";
+                    
+                    if (!data.dates || data.dates.length === 0) {
+                        const empty = document.createElement("div");
+                        empty.className = "empty";
+                        empty.textContent = "No history available.";
+                        list.appendChild(empty);
+                        return;
+                    }
+                    
+                    for (const date of data.dates) {
+                        const link = document.createElement("a");
+                        link.className = "date-link";
+                        link.href = `/queue?date=${encodeURIComponent(date)}`;
+                        
+                        const dateText = document.createElement("span");
+                        dateText.textContent = date;
+                        
+                        const viewText = document.createElement("span");
+                        viewText.textContent = "View Queue →";
+                        
+                        link.appendChild(dateText);
+                        link.appendChild(viewText);
+                        
+                        list.appendChild(link);
+                    }
+                } catch (error) {
+                    status.textContent = error.message;
+                    status.style.color = "var(--error)";
+                }
+            }
+            
+            loadHistory();
+        </script>
+    </body>
+</html>

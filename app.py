@@ -34,7 +34,9 @@ from pdf_service import (  # noqa: E402
 )
 from queue_store import (  # noqa: E402
     add_printed_part,
+    clear_printed_parts,
     delete_printed_part,
+    list_history_dates,
     list_printed_parts,
     update_printed_part,
 )
@@ -53,6 +55,14 @@ def index():
 @app.get("/queue")
 def queue_page():
     return render_template("queue.html")
+
+
+@app.get("/history")
+def history_page():
+    return render_template("history.html")
+
+
+
 
 
 @app.get("/healthz")
@@ -248,21 +258,36 @@ def lookup():
     return jsonify(result)
 
 
+
+
+
 @app.get("/api/print-queue")
 def print_queue():
-    return jsonify(list_printed_parts())
+    try:
+        return jsonify(list_printed_parts(request.args.get("date")))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@app.get("/api/history")
+def history_dates():
+    return jsonify(dates=list_history_dates())
 
 
 def _queue_xlsx(rows):
     sheet_rows = [
-        '<row r="1"><c r="A1" t="inlineStr"><is><t>Barcode</t></is></c>'
-        '<c r="B1" t="inlineStr"><is><t>Quantity</t></is></c></row>'
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>Date</t></is></c>'
+        '<c r="B1" t="inlineStr"><is><t>PO Number</t></is></c>'
+        '<c r="C1" t="inlineStr"><is><t>Barcode</t></is></c>'
+        '<c r="D1" t="inlineStr"><is><t>Quantity</t></is></c></row>'
     ]
     for row_number, item in enumerate(rows, 2):
         sheet_rows.append(
             f'<row r="{row_number}">'
-            f'<c r="A{row_number}" t="inlineStr"><is><t>{escape(str(item.get("part_code", "")))}</t></is></c>'
-            f'<c r="B{row_number}"><v>{int(item.get("quantity") or 0)}</v></c>'
+            f'<c r="A{row_number}" t="inlineStr"><is><t>{escape(str(item.get("work_date", "")))}</t></is></c>'
+            f'<c r="B{row_number}" t="inlineStr"><is><t>{escape(str(item.get("po_number", "")))}</t></is></c>'
+            f'<c r="C{row_number}" t="inlineStr"><is><t>{escape(str(item.get("part_code", "")))}</t></is></c>'
+            f'<c r="D{row_number}"><v>{int(item.get("quantity") or 0)}</v></c>'
             "</row>"
         )
 
@@ -301,12 +326,15 @@ def _queue_xlsx(rows):
 
 @app.get("/api/print-queue/export.xlsx")
 def export_print_queue_xlsx():
-    rows = list_printed_parts()["items"]
+    try:
+        queue = list_printed_parts(request.args.get("date"))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
     return send_file(
-        _queue_xlsx(rows),
+        _queue_xlsx(queue["items"]),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
-        download_name="print-queue.xlsx",
+        download_name=f"print-queue-{queue['date']}.xlsx",
         max_age=0,
     )
 
@@ -318,6 +346,7 @@ def add_print_queue_item():
         item = add_printed_part(
             str(payload.get("part_code", "")),
             payload.get("quantity", 1),
+            str(payload.get("po_number", "")),
         )
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
@@ -330,6 +359,7 @@ def update_print_queue_item(item_id):
     try:
         item = update_printed_part(
             item_id,
+            str(payload.get("po_number", "")),
             str(payload.get("part_code", "")),
             payload.get("quantity", 1),
         )
@@ -345,6 +375,11 @@ def delete_print_queue_item(item_id):
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     return jsonify(ok=True)
+
+
+@app.delete("/api/print-queue")
+def clear_print_queue():
+    return jsonify(ok=True, cleared=clear_printed_parts())
 
 
 @app.get("/print/<token>")
