@@ -63,6 +63,9 @@ ODOO_CACHE_TTL=300
 MAX_UPLOAD_SIZE_MB=20
 PRINT_QUEUE_DB_PATH=/data/printed_parts.sqlite3
 APP_TIMEZONE=Asia/Kolkata
+PLANNER_API_URL=https://your-planner-api.example.com/api
+BARCODE_SYNC_TOKEN=the-same-secret-configured-on-planner
+PLANNER_SYNC_TIMEOUT=15
 PORT=8000
 GUNICORN_THREADS=4
 GUNICORN_TIMEOUT=360
@@ -79,6 +82,12 @@ grouped by PO and date; a new day starts with an empty active queue while older
 dates remain available from the queue date picker for viewing and XLSX export.
 Add or replace today's PO label PDFs on `/plans`; operators select the active PO
 from the sidebar on the main print page.
+
+Producing or rejecting a panel is sent to Planner immediately. For production,
+the vendor sends only PO, part code, and quantity; Planner allocates it across
+the PO's SOs in plan-priority order. It also updates associated frame and
+edge-band parts. Retries reuse one event ID, so a lost response cannot
+double-count production.
 
 For Coolify, mount a persistent volume at `/data` and set
 `PRINT_QUEUE_DB_PATH=/data/printed_parts.sqlite3`. Without that volume, a

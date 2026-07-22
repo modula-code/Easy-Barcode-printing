@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import xmlrpc.client
 import zipfile
@@ -32,12 +33,19 @@ from pdf_service import (  # noqa: E402
     get_print_artifact,
     prepare_matching_pages,
 )
+from planner_client import PlannerSyncError, sync_production_event  # noqa: E402
 from queue_store import (  # noqa: E402
     add_printed_part,
     clear_printed_parts,
+    complete_production_event,
     delete_printed_part,
+    fail_production_event,
+    get_printed_part,
+    get_production_event,
     list_history_dates,
     list_printed_parts,
+    list_production_events,
+    stage_production_event,
     update_printed_part,
 )
 
@@ -339,18 +347,110 @@ def export_print_queue_xlsx():
     )
 
 
+def _push_to_planner(event):
+    """Send a staged event to Planner and apply its answer to the local queue.
+
+    Returns (item, synced). Raises PlannerSyncError / ValueError, already
+    recorded on the event so the ledger can show and retry the failure."""
+    try:
+        if event["status"] == "synced" and event["planner_response"]:
+            synced = json.loads(event["planner_response"])
+        else:
+            payload = {
+                "eventId": event["event_id"],
+                "poNumber": event["po_number"],
+                "partCode": event["part_code"],
+                "quantity": event["quantity"],
+                "action": event["action"],
+                "workDate": event["work_date"],
+            }
+            if event["planner_plan_id"]:
+                payload["planId"] = event["planner_plan_id"]
+            if event["so_number"]:
+                payload["soNumber"] = event["so_number"]
+            synced = sync_production_event(payload)
+        return complete_production_event(event["event_id"], synced), synced
+    except (PlannerSyncError, ValueError) as exc:
+        fail_production_event(event["event_id"], str(exc))
+        raise
+
+
 @app.post("/api/print-queue")
 def add_print_queue_item():
     payload = request.get_json(silent=True) or {}
     try:
-        item = add_printed_part(
+        event = stage_production_event(
+            str(payload.get("event_id", "")),
+            "produced",
+            str(payload.get("po_number", "")),
+            "",
             str(payload.get("part_code", "")),
             payload.get("quantity", 1),
-            str(payload.get("po_number", "")),
+            str(payload.get("work_date", "")),
         )
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
-    return jsonify(item=item), 201
+    try:
+        item, synced = _push_to_planner(event)
+    except PlannerSyncError as exc:
+        return jsonify(error=str(exc)), exc.status_code
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 500
+    return jsonify(item=item, sync=synced), 201
+
+
+@app.post("/api/print-queue/<int:item_id>/reject")
+def reject_print_queue_item(item_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        item = get_printed_part(item_id)
+        event = stage_production_event(
+            str(payload.get("event_id", "")),
+            "rejected",
+            item["po_number"],
+            item["so_number"],
+            item["part_code"],
+            payload.get("quantity", 1),
+            item["work_date"],
+            planner_plan_id=item["planner_plan_id"],
+            target_row_id=item_id,
+        )
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    try:
+        item, synced = _push_to_planner(event)
+    except PlannerSyncError as exc:
+        return jsonify(error=str(exc)), exc.status_code
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 500
+    return jsonify(item=item, sync=synced)
+
+
+@app.get("/api/production-events")
+def production_events():
+    try:
+        return jsonify(list_production_events(request.args.get("date")))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@app.post("/api/production-events/<event_id>/retry")
+def retry_production_event(event_id):
+    """Resend an event Planner never accepted. The event id is unchanged, so
+    Planner replays it instead of double-counting if it did land."""
+    try:
+        event = get_production_event(event_id)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 404
+    if event["status"] == "synced":
+        return jsonify(error="That event is already synced with Planner."), 409
+    try:
+        item, synced = _push_to_planner(event)
+    except PlannerSyncError as exc:
+        return jsonify(error=str(exc)), exc.status_code
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 500
+    return jsonify(item=item, sync=synced)
 
 
 @app.put("/api/print-queue/<int:item_id>")

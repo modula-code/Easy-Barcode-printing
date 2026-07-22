@@ -487,12 +487,16 @@ def fetch_panel_label_pdf(
 
 
 def normalize_sm_code(value: str) -> str:
+    """Scanned SM code -> 'SM-<main>-<colour>'. Labels carry a bare 'B313-AD',
+    so the 'SM-' prefix is always added. Idempotent (the UI also normalizes)."""
     parts = [part.strip().upper() for part in str(value or "").split("-")]
-    had_sm = bool(parts and parts[0] == "SM")
-    if had_sm:
+    if parts and parts[0] == "SM":
         parts = parts[1:]
+    parts = [part for part in parts if part]
+    if not parts:
+        return ""
     if len(parts) != 2:
-        return ("SM-" if had_sm else "") + "-".join(parts)
+        return "SM-" + "-".join(parts)
 
     def is_main_code(part: str) -> bool:
         return part.isdigit() or (
@@ -502,9 +506,33 @@ def normalize_sm_code(value: str) -> str:
     first, second = parts
     if is_main_code(second) and len(first) == 2 and first.isalpha():
         first, second = second, first
-    if is_main_code(first) and len(second) == 2 and second.isalpha():
-        return f"SM-{first}-{second}"
-    return ("SM-" if had_sm else "") + "-".join(parts)
+    return f"SM-{first}-{second}"
+
+
+def _sm_colour_suffix_parts(code: str) -> tuple[str, str] | None:
+    """('SM-B313-AD') -> ('SM-B313', 'AD'); None when there is no colour suffix."""
+    parts = code.split("-")
+    if len(parts) < 3 or parts[0] != "SM":
+        return None
+    last = parts[-1]
+    if len(last) != 2 or not last[0].isalpha() or not last.isalnum():
+        return None
+    return "-".join(parts[:-1]), last
+
+
+def spaced_sm_colour_form(code: str) -> str:
+    """'SM-0079-B3' -> 'SM-0079 - B3', the form Odoo stores colour variants in."""
+    parts = _sm_colour_suffix_parts(code)
+    return f"{parts[0]} - {parts[1]}" if parts else code
+
+
+def strip_sm_colour_suffix(code: str) -> str:
+    """'SM-B313-AD' -> 'SM-B313'; unchanged when there is no colour suffix.
+
+    Odoo does not always hold the colour-suffixed variant, so a failed lookup
+    retries the base code, whose search pulls the whole colour family."""
+    parts = _sm_colour_suffix_parts(code)
+    return parts[0] if parts else code
 
 
 def lookup_part_codes(
@@ -540,8 +568,33 @@ def lookup_part_codes(
     order = _find_purchase_order(
         execute, normalized_po, ["id", "name", "partner_ref"]
     )
-    order_id = order["id"]
     print(f"[lookup] PO {order.get('name')} partner_ref={order.get('partner_ref')!r}")
+
+    result = _match_codes(execute, order, normalized_po, normalized_codes)
+    if result["matches"]:
+        return result
+    # Retry only the codes Odoo could not resolve, so a code that did resolve
+    # keeps its colour and still constrains the match.
+    retry_codes = [
+        item["sm_code"]
+        if item["code_resolved"]
+        else strip_sm_colour_suffix(item["sm_code"])
+        for item in result["results"]
+    ]
+    if retry_codes == normalized_codes:
+        return result
+    print(f"[lookup] retrying without colour suffix: {retry_codes}")
+    retry = _match_codes(execute, order, normalized_po, retry_codes)
+    return retry if retry["matches"] else result
+
+
+def _match_codes(
+    execute: Execute,
+    order: dict[str, Any],
+    normalized_po: str,
+    normalized_codes: list[str],
+) -> dict[str, Any]:
+    order_id = order["id"]
     required_code_counts = Counter(normalized_codes)
     unique_codes = list(dict.fromkeys(normalized_codes))
 
@@ -555,16 +608,18 @@ def lookup_part_codes(
         # so include archived products in the lookup. A bare code without a
         # colour suffix (e.g. 'SM-0079') also pulls its colour variants
         # ('SM-0079 - B3', 'SM-0079-AA') so the user can pick a colour.
+        # Labels print 'SM-0079-B3' while Odoo stores 'SM-0079 - B3', so the
+        # spaced form is searched too - matching the exact variant keeps its
+        # colour attributes, which is what narrows the finished product later.
+        terms = [code, f"{code} - %", f"{code}-%"]
+        spaced = spaced_sm_colour_form(code)
+        if spaced != code:
+            terms.append(spaced)
         products = _search_read(
             execute,
             "product.product",
-            [
-                "|",
-                "|",
-                ("default_code", "=ilike", code),
-                ("default_code", "=ilike", f"{code} - %"),
-                ("default_code", "=ilike", f"{code}-%"),
-            ],
+            ["|"] * (len(terms) - 1)
+            + [("default_code", "=ilike", term) for term in terms],
             ["id", "default_code", "product_template_attribute_value_ids"],
             limit=100,
             context={"active_test": False},
@@ -572,7 +627,7 @@ def lookup_part_codes(
         variant_prefixes = (f"{code} - ", f"{code}-")
         for product in products:
             actual_code = str(product.get("default_code") or "").strip().upper()
-            if actual_code != code and not actual_code.startswith(
+            if actual_code not in (code, spaced) and not actual_code.startswith(
                 variant_prefixes
             ):
                 continue
@@ -816,6 +871,11 @@ def lookup_part_codes(
                 }
             )
 
+        # code_resolved: the component itself exists and is used in a BOM. When
+        # it is False the scanned code is wrong (or too specific) and is worth
+        # retrying without its colour suffix; when it is True the code is right
+        # and the PO/colour is the mismatch, so widening would only hide that.
+        code_resolved = bool(product_ids_by_code.get(code) and candidate_ids)
         if not product_ids_by_code.get(code):
             error = f"Product '{code}' was not found in Odoo."
         elif not candidate_ids:
@@ -833,7 +893,14 @@ def lookup_part_codes(
                 f"products are present in purchase order '{normalized_po}'."
             )
 
-        results.append({"sm_code": code, "matches": matches, "error": error})
+        results.append(
+            {
+                "sm_code": code,
+                "matches": matches,
+                "error": error,
+                "code_resolved": code_resolved,
+            }
+        )
 
     consolidated_by_product: dict[int, dict[str, Any]] = {}
     for item in results:
