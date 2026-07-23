@@ -220,6 +220,7 @@ def _many2one_name(value: Any) -> str:
 
 
 PO_FALLBACK_COMPANY_ID = int(os.getenv("ODOO_PO_COMPANY_ID", "1"))
+SALE_ORDER_COMPANY_ID = 2
 
 
 def _po_search_terms(po_number: str) -> list[str]:
@@ -431,7 +432,7 @@ def fetch_panel_label_pdf(
     sale_orders = _search_read(
         execute,
         "sale.order",
-        [("name", "=", so_number)],
+        [("name", "=", so_number), ("company_id", "=", SALE_ORDER_COMPANY_ID)],
         ["id", "name", "picking_ids"],
         limit=1,
     )
@@ -455,7 +456,7 @@ def fetch_panel_label_pdf(
             ("state", "!=", "done"),
             ("picking_type_id.code", "=", "outgoing"),
         ],
-        ["id", "state", "company_id"],
+        ["id", "name", "state", "company_id"],
         order="id",
     )
     if not pickings:
@@ -482,6 +483,7 @@ def fetch_panel_label_pdf(
     return {
         "po_number": order.get("name") or normalized_po,
         "so_number": so_number,
+        "picking_names": [picking["name"] for picking in pickings],
         "pdf_bytes": pdf_bytes,
     }
 
@@ -881,10 +883,31 @@ def lookup_part_codes(
         for match in matches:
             match["sm_codes"] = list(normalized_codes)
 
-    return {
+    response = {
         "po_number": order.get("name") or normalized_po,
         "purchase_order_id": order_id,
         "partner_ref": order.get("partner_ref"),
         "results": results,
         "matches": matches,
     }
+    if matches:
+        return response
+
+    fallback_codes = []
+    for code in normalized_codes:
+        base_code, separator, suffix = code.rpartition("-")
+        fallback_codes.append(
+            base_code
+            if separator and len(suffix) == 2 and suffix.isalpha()
+            else code
+        )
+    if fallback_codes != normalized_codes:
+        fallback = lookup_part_codes(
+            normalized_po,
+            fallback_codes,
+            execute=execute,
+        )
+        if fallback["matches"]:
+            return fallback
+
+    return response
