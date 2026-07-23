@@ -63,6 +63,9 @@ ODOO_CACHE_TTL=300
 MAX_UPLOAD_SIZE_MB=20
 PRINT_QUEUE_DB_PATH=/data/printed_parts.sqlite3
 APP_TIMEZONE=Asia/Kolkata
+PLANNER_API_URL=https://your-planner-api.example.com/api
+BARCODE_SYNC_TOKEN=the-same-secret-configured-on-planner
+PLANNER_SYNC_TIMEOUT=15
 PORT=8000
 GUNICORN_THREADS=4
 GUNICORN_TIMEOUT=360
@@ -79,6 +82,10 @@ grouped by PO and date; a new day starts with an empty active queue while older
 dates remain available from the queue date picker for viewing and XLSX export.
 Add or replace today's PO label PDFs on `/plans`; operators select the active PO
 from the sidebar on the main print page.
+
+Prints are recorded in the local queue by default. Set
+`PLANNER_SYNC_ENABLED=true` only when this app should synchronously send
+production and rejection events to a configured Planner API.
 
 For Coolify, mount a persistent volume at `/data` and set
 `PRINT_QUEUE_DB_PATH=/data/printed_parts.sqlite3`. Without that volume, a

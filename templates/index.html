@@ -385,7 +385,7 @@
                     >
                 </header>
                 <p class="intro">
-                    Scan or enter the PO and SM codes, then find the label.
+                    Scan or enter the PO and SM codes. Prints are recorded in the local queue.
                 </p>
 
                 <form id="lookup-form">
@@ -435,6 +435,16 @@
                                 type="text"
                                 autocomplete="off"
                                 autocapitalize="characters"
+                            />
+                        </div>
+
+                        <div class="field full-width">
+                            <label for="work-date">Work date</label>
+                            <input
+                                id="work-date"
+                                name="work_date"
+                                type="date"
+                                required
                             />
                         </div>
 
@@ -496,6 +506,7 @@
             let fetchedLabelFile = null;
             let poSuggestionTimer = 0;
             let poSuggestionController = null;
+            let resolvedPoNumber = "";
 
             function unlockFetchedLabel(text) {
                 fetchedLabelFile = null;
@@ -583,6 +594,7 @@
             // alternate 1 -> 2 -> 1 so the newest two scans are kept.
             const code1Input = document.querySelector("#code-1");
             const code2Input = document.querySelector("#code-2");
+            const workDateInput = document.querySelector("#work-date");
 
             // Keep scanned codes across navigation and reloads.
             const FIELDS_KEY = "barcode-print-fields";
@@ -616,16 +628,18 @@
             let scanFocusValue = "";
             let scanOverrideSlot = 0;
 
+            // Mirrors normalize_sm_code() in odoo_client.py. Labels carry a
+            // bare "B313-AD", so "SM-" is always added. Idempotent: this runs
+            // on scan and again on submit.
             function normalizeSmCode(value) {
                 let parts = String(value || "")
                     .toUpperCase()
                     .split("-")
                     .map((part) => part.trim());
-                const hadSm = parts[0] === "SM";
-                if (hadSm) parts = parts.slice(1);
-                if (parts.length !== 2) {
-                    return `${hadSm ? "SM-" : ""}${parts.join("-")}`;
-                }
+                if (parts[0] === "SM") parts = parts.slice(1);
+                parts = parts.filter(Boolean);
+                if (!parts.length) return "";
+                if (parts.length !== 2) return `SM-${parts.join("-")}`;
 
                 const isMainCode = (part) =>
                     /^\d+$/.test(part) || /^[A-Z]\d+$/.test(part);
@@ -633,9 +647,7 @@
                 if (isMainCode(second) && /^[A-Z]{2}$/.test(first)) {
                     [first, second] = [second, first];
                 }
-                return isMainCode(first) && /^[A-Z]{2}$/.test(second)
-                    ? `SM-${first}-${second}`
-                    : `${hadSm ? "SM-" : ""}${parts.join("-")}`;
+                return `SM-${first}-${second}`;
             }
 
             function fillScannedCode(code) {
@@ -686,7 +698,6 @@
 
             poInput.addEventListener("input", () => {
                 saveFields();
-                clearActivePlan();
                 if (fetchedLabelFile) {
                     unlockFetchedLabel("PO changed. Fetch the label PDF again.");
                 }
@@ -720,7 +731,7 @@
                     if (!response.ok) {
                         throw new Error(data.error || "Lookup failed.");
                     }
-                    poCheckResult.textContent = `${data.po_number}: SO ${data.partner_ref ?? "(empty)"}`;
+                    poCheckResult.textContent = `${data.po_number}: PO found`;
                 } catch (error) {
                     poCheckResult.textContent = error.message || "Lookup failed.";
                 } finally {
@@ -750,20 +761,31 @@
                 message.hidden = false;
             }
 
-            async function addPrintedPartToQueue(match, quantity, printUrl) {
+            function newEventId() {
+                if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+                return `event-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            }
+
+            async function addPrintedPartToQueue(match, quantity, eventId) {
+                if (!resolvedPoNumber) {
+                    throw new Error("Enter a PO before recording the print.");
+                }
                 const response = await fetch("/api/print-queue", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        po_number: poInput.value.trim().toUpperCase(),
+                        event_id: eventId,
+                        po_number: resolvedPoNumber,
                         part_code: match.part_code,
                         quantity,
+                        work_date: workDateInput.value,
                     }),
                 });
                 const data = await response.json();
                 if (!response.ok) {
-                    throw new Error(data.error || "Could not add to queue.");
+                    throw new Error(data.error || "Could not record the print.");
                 }
+                return data;
             }
 
             function queuedPrintLink(match, href, quantity, text, secondary = false) {
@@ -777,15 +799,23 @@
                 link.textContent = text;
                 link.addEventListener("click", async (event) => {
                     event.preventDefault();
+                    if (!workDateInput.reportValidity()) return;
+                    const eventKey = `production-event:${workDateInput.value}:${resolvedPoNumber}:${match.part_code}:${quantity}`;
+                    const eventId = sessionStorage.getItem(eventKey) || newEventId();
                     const printWindow = window.open("about:blank", "_blank");
                     if (printWindow) {
                         printWindow.opener = null;
                     }
                     try {
-                        await addPrintedPartToQueue(match, quantity, href);
-                        showMessage(
-                            `Queued ${match.part_code} x ${quantity}. Open Queue to review or export.`,
-                        );
+                        sessionStorage.setItem(eventKey, eventId);
+                        const data = await addPrintedPartToQueue(match, quantity, eventId);
+                        sessionStorage.removeItem(eventKey);
+                        const associated = (data.sync?.associated || [])
+                            .map((item) => `${item.code} x ${item.quantity}`)
+                            .join(", ");
+                        showMessage(data.sync
+                            ? `Synced ${match.part_code} x ${quantity}${associated ? `; associated ${associated}` : ""}.`
+                            : `Recorded ${match.part_code} x ${quantity} in the local queue.`);
                         if (printWindow) {
                             printWindow.location = href;
                         } else {
@@ -796,7 +826,7 @@
                             printWindow.close();
                         }
                         showMessage(
-                            error.message || "Could not add to queue.",
+                            error.message || "Could not record the print.",
                             true,
                         );
                     }
@@ -805,6 +835,8 @@
             }
 
             function renderResults(data) {
+                resolvedPoNumber = String(data.po_number || "").trim().toUpperCase();
+                if (resolvedPoNumber) poInput.value = resolvedPoNumber;
                 results.replaceChildren();
                 let renderedAny = false;
 
@@ -848,19 +880,19 @@
                             match,
                             match.document_match.print_url,
                             1,
-                            "Print",
+                            "Print and record 1",
                         );
-                        documentStatus.appendChild(printLink);
+                        documentStatus.append(printLink);
 
                         if (match.document_match.matching_page_count > 1) {
                             const printAllLink = queuedPrintLink(
                                 match,
                                 match.document_match.all_print_url,
                                 match.document_match.matching_page_count,
-                                `Print all (${match.document_match.matching_page_count})`,
+                                `Print and record all quantity (${match.document_match.matching_page_count})`,
                                 true,
                             );
-                            documentStatus.appendChild(printAllLink);
+                            documentStatus.append(printAllLink);
                         }
                     } else {
                         documentStatus.textContent = `Part code ${match.part_code} was not found in the uploaded PDF.`;

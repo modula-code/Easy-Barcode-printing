@@ -141,7 +141,78 @@
             }
 
             #status.error { color: var(--error); }
-            #list { display: grid; gap: 10px; }
+            #list,
+            #events { display: grid; gap: 10px; }
+
+            h2 {
+                margin: 26px 0 6px;
+                font-size: 1.05rem;
+            }
+
+            .section-note {
+                margin: 0 0 10px;
+                color: var(--muted);
+                font-size: 0.85rem;
+            }
+
+            .event {
+                display: grid;
+                grid-template-columns: 1fr auto;
+                gap: 4px 12px;
+                padding: 12px 14px;
+                border: 1px solid var(--line);
+                border-left-width: 5px;
+                border-radius: 8px;
+                background: var(--surface);
+            }
+
+            .event.synced { border-left-color: #3f8f5f; }
+            .event.pending { border-left-color: #c79a3a; }
+            .event.failed { border-left-color: var(--error); }
+
+            .event-head {
+                font-weight: 750;
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .pill {
+                padding: 2px 9px;
+                border-radius: 999px;
+                font-size: 0.72rem;
+                font-weight: 750;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+            }
+
+            .synced .pill { background: #e6f3ea; color: #2f6b48; }
+            .pending .pill { background: #fbf1da; color: #8a6414; }
+            .failed .pill { background: #fff1f1; color: var(--error); }
+
+            .event-detail {
+                grid-column: 1 / -1;
+                margin: 0;
+                color: var(--muted);
+                font-size: 0.85rem;
+            }
+
+            .event-detail.error-text { color: var(--error); }
+
+            .event button {
+                grid-column: 1;
+                justify-self: start;
+                height: 38px;
+                margin-top: 6px;
+            }
+
+            .reject-box {
+                display: grid;
+                grid-template-columns: 84px auto;
+                align-items: end;
+                gap: 8px;
+            }
 
             .row {
                 display: grid;
@@ -206,11 +277,20 @@
 
                 <p id="status" aria-live="polite"></p>
                 <div id="list" aria-live="polite"></div>
+
+                <h2>Planner sync</h2>
+                <p class="section-note">
+                    Every scan and rejection sent to Planner. “Synced” means
+                    Planner booked it and told us the plan, SO and production
+                    day. Anything else never reached the plan — retry it.
+                </p>
+                <div id="events" aria-live="polite"></div>
             </section>
         </main>
 
         <script>
             const list = document.querySelector("#list");
+            const events = document.querySelector("#events");
             const statusText = document.querySelector("#status");
             const dateInput = document.querySelector("#queue-date");
             const dateNote = document.querySelector("#date-note");
@@ -221,6 +301,11 @@
             function showStatus(message, error = false) {
                 statusText.textContent = message;
                 statusText.className = error ? "error" : "";
+            }
+
+            function newEventId() {
+                if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+                return `event-${Date.now()}-${Math.random().toString(16).slice(2)}`;
             }
 
             async function requestJson(url, options) {
@@ -256,7 +341,7 @@
                 dateNote.textContent = archived
                     ? "Archived queue — view and export only"
                     : "Today’s shared queue";
-                clearButton.hidden = archived;
+                clearButton.hidden = true;
                 exportLink.href = `/api/print-queue/export.xlsx?date=${encodeURIComponent(data.date)}`;
 
                 if (!data.items.length) {
@@ -272,68 +357,186 @@
                 for (const item of data.items) {
                     const row = document.createElement("div");
                     row.className = "row";
-                    const po = field("PO number", "text", item.po_number, archived);
-                    const barcode = field("Barcode", "text", item.part_code, archived);
-                    const quantity = field("Quantity", "number", item.quantity, archived);
+                    const po = field("PO number", "text", item.po_number, true);
+                    const barcode = field("Barcode", "text", item.part_code, true);
+                    const quantity = field("Good quantity", "number", item.quantity, true);
                     row.append(po.label, barcode.label, quantity.label);
 
-                    if (!archived) {
-                        const actions = document.createElement("div");
-                        const save = document.createElement("button");
-                        const remove = document.createElement("button");
-                        actions.className = "actions";
-                        save.type = remove.type = "button";
-                        save.textContent = "Save";
-                        remove.textContent = "Remove";
-                        remove.className = "remove";
+                    if (!archived && item.status === "synced") {
+                        // QC rejection: the quantity is typed in the row and the
+                        // button asks for confirmation in place, so nothing
+                        // blocks the scanner on a shop-floor tablet.
+                        const box = document.createElement("div");
+                        const qtyField = field("QC reject qty", "number", "", false);
+                        const reject = document.createElement("button");
+                        box.className = "reject-box";
+                        qtyField.input.max = String(item.quantity);
+                        qtyField.input.placeholder = "0";
+                        reject.type = "button";
+                        reject.textContent = "Reject";
+                        reject.className = "remove";
+                        const rejectEventKey = `rejection-event:${item.id}`;
+                        const rejectQuantityKey = `rejection-quantity:${item.id}`;
+                        let rejectEventId = sessionStorage.getItem(rejectEventKey) || newEventId();
+                        let pendingRejectQuantity = Number(sessionStorage.getItem(rejectQuantityKey)) || null;
+                        let armed = false;
+                        if (pendingRejectQuantity) qtyField.input.value = String(pendingRejectQuantity);
 
-                        save.addEventListener("click", async () => {
-                            const nextPo = po.input.value.trim().toUpperCase();
-                            const code = barcode.input.value.trim().toUpperCase();
-                            const qty = Number(quantity.input.value);
-                            if (!nextPo || !code || !Number.isInteger(qty) || qty < 1 || qty > 500) {
-                                showStatus("Enter a PO, barcode, and quantity from 1 to 500.", true);
+                        const disarm = () => {
+                            armed = false;
+                            reject.textContent = "Reject";
+                        };
+                        qtyField.input.addEventListener("input", disarm);
+
+                        reject.addEventListener("click", async () => {
+                            const qty = Number(qtyField.input.value);
+                            if (!Number.isInteger(qty) || qty < 1 || qty > item.quantity) {
+                                showStatus(`Enter a rejected quantity from 1 to ${item.quantity}.`, true);
                                 return;
                             }
-                            save.disabled = true;
+                            if (pendingRejectQuantity !== null && qty !== pendingRejectQuantity) {
+                                showStatus(`Retry the pending rejection with quantity ${pendingRejectQuantity}.`, true);
+                                return;
+                            }
+                            if (!armed) {
+                                armed = true;
+                                reject.textContent = `Confirm −${qty}`;
+                                showStatus(
+                                    `${item.part_code} drops to ${item.quantity - qty}. ` +
+                                        "Its frame and EB are removed in Planner too. Press again to confirm.",
+                                );
+                                return;
+                            }
+                            pendingRejectQuantity = qty;
+                            reject.disabled = true;
                             try {
-                                await requestJson(`/api/print-queue/${item.id}`, {
-                                    method: "PUT",
+                                sessionStorage.setItem(rejectEventKey, rejectEventId);
+                                sessionStorage.setItem(rejectQuantityKey, String(qty));
+                                const result = await requestJson(`/api/print-queue/${item.id}/reject`, {
+                                    method: "POST",
                                     headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({ po_number: nextPo, part_code: code, quantity: qty }),
+                                    body: JSON.stringify({ event_id: rejectEventId, quantity: qty }),
                                 });
-                                showStatus(`Saved ${nextPo} — ${code} x ${qty}.`);
+                                sessionStorage.removeItem(rejectEventKey);
+                                sessionStorage.removeItem(rejectQuantityKey);
+                                rejectEventId = newEventId();
+                                pendingRejectQuantity = null;
+                                const associated = (result.sync?.associated || [])
+                                    .map((part) => `${part.code} x ${part.quantity}`)
+                                    .join(", ");
+                                showStatus(`Rejected ${item.part_code} x ${qty}${associated ? `; removed ${associated}` : ""}.`);
                                 await load(data.date);
                             } catch (error) {
                                 showStatus(error.message, true);
                             } finally {
-                                save.disabled = false;
+                                reject.disabled = false;
+                                disarm();
                             }
                         });
-
-                        remove.addEventListener("click", async () => {
-                            if (!confirm(`Remove ${item.part_code} for ${item.po_number}?`)) return;
-                            remove.disabled = true;
-                            try {
-                                await requestJson(`/api/print-queue/${item.id}`, { method: "DELETE" });
-                                showStatus(`Removed ${item.part_code}.`);
-                                await load(data.date);
-                            } catch (error) {
-                                showStatus(error.message, true);
-                            } finally {
-                                remove.disabled = false;
-                            }
-                        });
-                        actions.append(save, remove);
-                        row.appendChild(actions);
+                        box.append(qtyField.label, reject);
+                        row.appendChild(box);
                     }
                     list.appendChild(row);
                 }
             }
 
+            function detail(parent, text, isError = false) {
+                if (!text) return;
+                const p = document.createElement("p");
+                p.className = isError ? "event-detail error-text" : "event-detail";
+                p.textContent = text;
+                parent.appendChild(p);
+            }
+
+            function renderEvents(data) {
+                events.replaceChildren();
+                if (!data.items.length) {
+                    const empty = document.createElement("p");
+                    empty.className = "empty";
+                    empty.textContent = "Nothing sent to Planner on this date.";
+                    events.appendChild(empty);
+                    return;
+                }
+
+                for (const item of data.items) {
+                    const synced = item.status === "synced";
+                    const card = document.createElement("div");
+                    const head = document.createElement("div");
+                    const pill = document.createElement("span");
+                    card.className = `event ${synced ? "synced" : item.error ? "failed" : "pending"}`;
+                    pill.className = "pill";
+                    pill.textContent = synced
+                        ? "Synced"
+                        : item.error
+                          ? "Not sent"
+                          : "Pending";
+                    head.className = "event-head";
+                    head.append(
+                        pill,
+                        document.createTextNode(
+                            `${item.action === "rejected" ? "QC reject" : "Produced"} ` +
+                                `${item.part_code} × ${item.quantity} · ${item.po_number}`,
+                        ),
+                    );
+                    card.appendChild(head);
+
+                    if (synced) {
+                        const allocations = (item.allocations || [])
+                            .map((a) => `${a.soNumber} × ${a.quantity}`)
+                            .join(", ");
+                        detail(
+                            card,
+                            [
+                                `Plan ${item.plan_label || item.plan_id}`,
+                                item.production_day ? `day ${item.production_day}` : "",
+                                allocations ? `booked to ${allocations}` : "",
+                                item.panel_total != null ? `plan total ${item.panel_total}` : "",
+                            ]
+                                .filter(Boolean)
+                                .join(" · "),
+                        );
+                        const associated = (item.associated || [])
+                            .map((part) => `${part.code} × ${part.quantity}`)
+                            .join(", ");
+                        detail(
+                            card,
+                            associated
+                                ? `${item.action === "rejected" ? "Also removed" : "Also consumed"}: ${associated}`
+                                : "",
+                        );
+                    } else {
+                        detail(card, item.error || "Waiting for Planner.", true);
+                        const retry = document.createElement("button");
+                        retry.type = "button";
+                        retry.textContent = "Retry sync";
+                        retry.addEventListener("click", async () => {
+                            retry.disabled = true;
+                            try {
+                                await requestJson(
+                                    `/api/production-events/${encodeURIComponent(item.event_id)}/retry`,
+                                    { method: "POST" },
+                                );
+                                showStatus(`Sent ${item.part_code} × ${item.quantity} to Planner.`);
+                                await load(data.date);
+                            } catch (error) {
+                                showStatus(error.message, true);
+                                retry.disabled = false;
+                            }
+                        });
+                        card.appendChild(retry);
+                    }
+                    events.appendChild(card);
+                }
+            }
+
             async function load(selectedDate = "") {
                 const query = selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : "";
-                render(await requestJson(`/api/print-queue${query}`));
+                const [queue, ledger] = await Promise.all([
+                    requestJson(`/api/print-queue${query}`),
+                    requestJson(`/api/production-events${query}`),
+                ]);
+                render(queue);
+                renderEvents(ledger);
             }
 
             dateInput.addEventListener("change", () => {

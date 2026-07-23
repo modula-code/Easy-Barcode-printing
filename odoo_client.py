@@ -3,6 +3,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.parse
@@ -220,7 +221,6 @@ def _many2one_name(value: Any) -> str:
 
 
 PO_FALLBACK_COMPANY_ID = int(os.getenv("ODOO_PO_COMPANY_ID", "1"))
-SALE_ORDER_COMPANY_ID = 2
 
 
 def _po_search_terms(po_number: str) -> list[str]:
@@ -407,11 +407,7 @@ def fetch_panel_label_pdf(
     execute: Execute | None = None,
     download: Callable[[list[int]], bytes] | None = None,
 ) -> dict[str, Any]:
-    """Fetch the Panel Label PDF for the sale order linked to a purchase order.
-
-    The PO's partner_ref holds the sale order name (e.g. 'S00334'); the label
-    is printed from that SO's outgoing delivery orders until they are Done.
-    """
+    """Fetch the Panel Label PDF for the vendor SO generated from this PO."""
     normalized_po = po_number.strip()
     if not normalized_po:
         raise ValueError("PO number is required.")
@@ -420,30 +416,52 @@ def fetch_panel_label_pdf(
         execute, _ = _connect()
 
     order = _find_purchase_order(
-        execute, normalized_po, ["id", "name", "partner_ref"]
+        execute, normalized_po, ["id", "name", "state"]
     )
-    so_number = str(order.get("partner_ref") or "").strip()
-    if not so_number:
-        raise OdooLookupError(
-            f"Purchase order '{normalized_po}' has no partner_ref, so the "
-            "sale order cannot be determined."
-        )
-
     sale_orders = _search_read(
         execute,
         "sale.order",
-        [("name", "=", so_number), ("company_id", "=", SALE_ORDER_COMPANY_ID)],
-        ["id", "name", "picking_ids"],
-        limit=1,
+        [
+            ("auto_purchase_order_id", "=", order["id"]),
+            ("state", "!=", "cancel"),
+        ],
+        ["id", "name", "state", "picking_ids"],
+        limit=2,
     )
     if not sale_orders:
+        sale_orders = _search_read(
+            execute,
+            "sale.order",
+            [
+                ("client_order_ref", "=", order.get("name") or normalized_po),
+                ("state", "!=", "cancel"),
+            ],
+            ["id", "name", "state", "picking_ids"],
+            limit=2,
+        )
+    if len(sale_orders) > 1:
         raise OdooLookupError(
-            f"Sale order '{so_number}' (partner_ref of '{normalized_po}') "
-            "was not found."
+            f"Purchase order '{normalized_po}' has multiple linked vendor sale "
+            "orders, so the correct delivery cannot be chosen safely."
+        )
+    if not sale_orders:
+        if order.get("state") == "draft":
+            raise OdooLookupError(
+                f"Purchase order '{normalized_po}' is still draft. Confirm it "
+                "in Odoo before fetching labels."
+            )
+        raise OdooLookupError(
+            f"No vendor sale order is linked to purchase order '{normalized_po}'."
         )
     sale_order = sale_orders[0]
+    so_number = str(sale_order.get("name") or "").strip()
     picking_ids = sale_order.get("picking_ids") or []
     if not picking_ids:
+        if sale_order.get("state") == "draft":
+            raise OdooLookupError(
+                f"Vendor sale order '{so_number}' is still draft. Confirm it "
+                "before fetching labels."
+            )
         raise OdooLookupError(
             f"Sale order '{so_number}' has no deliveries."
         )
@@ -456,7 +474,7 @@ def fetch_panel_label_pdf(
             ("state", "!=", "done"),
             ("picking_type_id.code", "=", "outgoing"),
         ],
-        ["id", "name", "state", "company_id"],
+        ["id", "state", "company_id"],
         order="id",
     )
     if not pickings:
@@ -483,18 +501,21 @@ def fetch_panel_label_pdf(
     return {
         "po_number": order.get("name") or normalized_po,
         "so_number": so_number,
-        "picking_names": [picking["name"] for picking in pickings],
         "pdf_bytes": pdf_bytes,
     }
 
 
 def normalize_sm_code(value: str) -> str:
+    """Scanned SM code -> 'SM-<main>-<colour>'. Labels carry a bare 'B313-AD',
+    so the 'SM-' prefix is always added. Idempotent (the UI also normalizes)."""
     parts = [part.strip().upper() for part in str(value or "").split("-")]
-    had_sm = bool(parts and parts[0] == "SM")
-    if had_sm:
+    if parts and parts[0] == "SM":
         parts = parts[1:]
+    parts = [part for part in parts if part]
+    if not parts:
+        return ""
     if len(parts) != 2:
-        return ("SM-" if had_sm else "") + "-".join(parts)
+        return "SM-" + "-".join(parts)
 
     def is_main_code(part: str) -> bool:
         return part.isdigit() or (
@@ -504,9 +525,184 @@ def normalize_sm_code(value: str) -> str:
     first, second = parts
     if is_main_code(second) and len(first) == 2 and first.isalpha():
         first, second = second, first
-    if is_main_code(first) and len(second) == 2 and second.isalpha():
-        return f"SM-{first}-{second}"
-    return ("SM-" if had_sm else "") + "-".join(parts)
+    return f"SM-{first}-{second}"
+
+
+def _sm_colour_suffix_parts(code: str) -> tuple[str, str] | None:
+    """('SM-B313-AD') -> ('SM-B313', 'AD'); None when there is no colour suffix."""
+    parts = code.split("-")
+    if len(parts) < 3 or parts[0] != "SM":
+        return None
+    last = parts[-1]
+    if len(last) != 2 or not last[0].isalpha() or not last.isalnum():
+        return None
+    return "-".join(parts[:-1]), last
+
+
+def spaced_sm_colour_form(code: str) -> str:
+    """'SM-0079-B3' -> 'SM-0079 - B3', the form Odoo stores colour variants in."""
+    parts = _sm_colour_suffix_parts(code)
+    return f"{parts[0]} - {parts[1]}" if parts else code
+
+
+def strip_sm_colour_suffix(code: str) -> str:
+    """'SM-B313-AD' -> 'SM-B313'; unchanged when there is no colour suffix.
+
+    Odoo does not always hold the colour-suffixed variant, so a failed lookup
+    retries the base code, whose search pulls the whole colour family."""
+    parts = _sm_colour_suffix_parts(code)
+    return parts[0] if parts else code
+
+
+_LEADING_CODE = re.compile(r"^\s*\[([^\]]+)\]")
+
+
+def _field_code(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = _LEADING_CODE.match(text)
+    token = match.group(1) if match else text.split(maxsplit=1)[0]
+    return token.strip("[]").upper()
+
+
+def _field_sm_code(value: Any) -> str:
+    code = _field_code(value)
+    return normalize_sm_code(code) if code else ""
+
+
+def _direct_purchase_line_match(
+    execute: Execute,
+    order: dict[str, Any],
+    normalized_codes: list[str],
+) -> dict[str, Any] | None:
+    """Use the PO's explicit SM IN/OUT fields before reverse-searching BOMs."""
+    lines = _search_read(
+        execute,
+        "purchase.order.line",
+        [("order_id", "=", order["id"])],
+        [
+            "id",
+            "product_id",
+            "x_studio_sm_in_code",
+            "x_studio_sm_out_code",
+        ],
+        order="id",
+    )
+
+    codes_by_line_id: dict[int, list[str]] = {}
+    for line in lines:
+        line_codes = [
+            code
+            for field in ("x_studio_sm_in_code", "x_studio_sm_out_code")
+            if (code := _field_sm_code(line.get(field)))
+        ]
+        if not line_codes:
+            product_code = _field_code(_many2one_name(line.get("product_id")))
+            if product_code.startswith("SM-"):
+                line_codes.append(normalize_sm_code(product_code))
+        codes_by_line_id[line["id"]] = line_codes
+
+    known_codes = {
+        code for line_codes in codes_by_line_id.values() for code in line_codes
+    }
+    if not any(code in known_codes for code in normalized_codes):
+        return None
+
+    required = Counter(normalized_codes)
+
+    def matching_lines(required_codes: Counter[str]) -> list[dict[str, Any]]:
+        return [
+            line
+            for line in lines
+            if required_codes <= Counter(codes_by_line_id[line["id"]])
+        ]
+
+    lines_by_code = {
+        code: matching_lines(Counter([code]))
+        for code in dict.fromkeys(normalized_codes)
+    }
+    final_lines = matching_lines(required)
+    candidate_lines = list(final_lines)
+    for code_lines in lines_by_code.values():
+        candidate_lines.extend(code_lines)
+    all_product_ids = sorted(
+        {
+            product_id
+            for line in candidate_lines
+            if (product_id := _many2one_id(line.get("product_id"))) is not None
+        }
+    )
+    products = (
+        _search_read(
+            execute,
+            "product.product",
+            [("id", "in", all_product_ids)],
+            ["id", "product_tmpl_id", "name", "default_code"],
+            context={"active_test": False},
+        )
+        if all_product_ids
+        else []
+    )
+    product_by_id = {product["id"]: product for product in products}
+
+    def consolidate(matched_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for line in matched_lines:
+            product_id = _many2one_id(line.get("product_id"))
+            if product_id is not None:
+                grouped.setdefault(product_id, []).append(line)
+
+        matches = []
+        for product_id, product_lines in grouped.items():
+            product = product_by_id.get(product_id, {})
+            template_id = _many2one_id(product.get("product_tmpl_id"))
+            relation_name = _many2one_name(product_lines[0].get("product_id"))
+            line_ids = [line["id"] for line in product_lines]
+            matches.append(
+                {
+                    "part_code": product.get("default_code") or relation_name,
+                    "product_id": product_id,
+                    "product_template_id": template_id,
+                    "product_template_name": _many2one_name(
+                        product.get("product_tmpl_id")
+                    )
+                    or product.get("name")
+                    or relation_name,
+                    "purchase_order_line_id": line_ids[0],
+                    "purchase_order_line_ids": line_ids,
+                    "purchase_order_line_count": len(line_ids),
+                }
+            )
+        return matches
+
+    results = []
+    for code in normalized_codes:
+        code_matches = consolidate(lines_by_code.get(code, []))
+        results.append(
+            {
+                "sm_code": code,
+                "matches": code_matches,
+                "error": (
+                    None
+                    if code_matches
+                    else f"SM code '{code}' is not listed on this purchase order."
+                ),
+                "code_resolved": bool(code_matches),
+            }
+        )
+
+    matches = consolidate(final_lines)
+    for match in matches:
+        match["sm_codes"] = list(normalized_codes)
+
+    return {
+        "po_number": order.get("name"),
+        "purchase_order_id": order["id"],
+        "partner_ref": order.get("partner_ref"),
+        "results": results,
+        "matches": matches,
+    }
 
 
 def lookup_part_codes(
@@ -516,9 +712,13 @@ def lookup_part_codes(
     execute: Execute | None = None,
 ) -> dict[str, Any]:
     """
-    Resolve each component product to finished products present on a purchase order.
+    Resolve scanned SM codes to products present on a purchase order.
 
-    Relationship:
+    Primary relationship:
+      purchase.order.line.x_studio_sm_in_code / x_studio_sm_out_code
+        -> purchase.order.line.product_id
+
+    Legacy fallback:
       mrp.bom.line.product_id (SM code)
         -> mrp.bom.line.bom_id
         -> mrp.bom.product_tmpl_id (finished product)
@@ -542,8 +742,38 @@ def lookup_part_codes(
     order = _find_purchase_order(
         execute, normalized_po, ["id", "name", "partner_ref"]
     )
-    order_id = order["id"]
     print(f"[lookup] PO {order.get('name')} partner_ref={order.get('partner_ref')!r}")
+
+    direct = _direct_purchase_line_match(execute, order, normalized_codes)
+    if direct is not None:
+        return direct
+
+    # ponytail: BOM lookup remains only for legacy PO lines without SM fields.
+    result = _match_codes(execute, order, normalized_po, normalized_codes)
+    if result["matches"]:
+        return result
+    # Retry only the codes Odoo could not resolve, so a code that did resolve
+    # keeps its colour and still constrains the match.
+    retry_codes = [
+        item["sm_code"]
+        if item["code_resolved"]
+        else strip_sm_colour_suffix(item["sm_code"])
+        for item in result["results"]
+    ]
+    if retry_codes == normalized_codes:
+        return result
+    print(f"[lookup] retrying without colour suffix: {retry_codes}")
+    retry = _match_codes(execute, order, normalized_po, retry_codes)
+    return retry if retry["matches"] else result
+
+
+def _match_codes(
+    execute: Execute,
+    order: dict[str, Any],
+    normalized_po: str,
+    normalized_codes: list[str],
+) -> dict[str, Any]:
+    order_id = order["id"]
     required_code_counts = Counter(normalized_codes)
     unique_codes = list(dict.fromkeys(normalized_codes))
 
@@ -557,16 +787,18 @@ def lookup_part_codes(
         # so include archived products in the lookup. A bare code without a
         # colour suffix (e.g. 'SM-0079') also pulls its colour variants
         # ('SM-0079 - B3', 'SM-0079-AA') so the user can pick a colour.
+        # Labels print 'SM-0079-B3' while Odoo stores 'SM-0079 - B3', so the
+        # spaced form is searched too - matching the exact variant keeps its
+        # colour attributes, which is what narrows the finished product later.
+        terms = [code, f"{code} - %", f"{code}-%"]
+        spaced = spaced_sm_colour_form(code)
+        if spaced != code:
+            terms.append(spaced)
         products = _search_read(
             execute,
             "product.product",
-            [
-                "|",
-                "|",
-                ("default_code", "=ilike", code),
-                ("default_code", "=ilike", f"{code} - %"),
-                ("default_code", "=ilike", f"{code}-%"),
-            ],
+            ["|"] * (len(terms) - 1)
+            + [("default_code", "=ilike", term) for term in terms],
             ["id", "default_code", "product_template_attribute_value_ids"],
             limit=100,
             context={"active_test": False},
@@ -574,7 +806,7 @@ def lookup_part_codes(
         variant_prefixes = (f"{code} - ", f"{code}-")
         for product in products:
             actual_code = str(product.get("default_code") or "").strip().upper()
-            if actual_code != code and not actual_code.startswith(
+            if actual_code not in (code, spaced) and not actual_code.startswith(
                 variant_prefixes
             ):
                 continue
@@ -818,6 +1050,11 @@ def lookup_part_codes(
                 }
             )
 
+        # code_resolved: the component itself exists and is used in a BOM. When
+        # it is False the scanned code is wrong (or too specific) and is worth
+        # retrying without its colour suffix; when it is True the code is right
+        # and the PO/colour is the mismatch, so widening would only hide that.
+        code_resolved = bool(product_ids_by_code.get(code) and candidate_ids)
         if not product_ids_by_code.get(code):
             error = f"Product '{code}' was not found in Odoo."
         elif not candidate_ids:
@@ -835,7 +1072,14 @@ def lookup_part_codes(
                 f"products are present in purchase order '{normalized_po}'."
             )
 
-        results.append({"sm_code": code, "matches": matches, "error": error})
+        results.append(
+            {
+                "sm_code": code,
+                "matches": matches,
+                "error": error,
+                "code_resolved": code_resolved,
+            }
+        )
 
     consolidated_by_product: dict[int, dict[str, Any]] = {}
     for item in results:
@@ -883,31 +1127,10 @@ def lookup_part_codes(
         for match in matches:
             match["sm_codes"] = list(normalized_codes)
 
-    response = {
+    return {
         "po_number": order.get("name") or normalized_po,
         "purchase_order_id": order_id,
         "partner_ref": order.get("partner_ref"),
         "results": results,
         "matches": matches,
     }
-    if matches:
-        return response
-
-    fallback_codes = []
-    for code in normalized_codes:
-        base_code, separator, suffix = code.rpartition("-")
-        fallback_codes.append(
-            base_code
-            if separator and len(suffix) == 2 and suffix.isalpha()
-            else code
-        )
-    if fallback_codes != normalized_codes:
-        fallback = lookup_part_codes(
-            normalized_po,
-            fallback_codes,
-            execute=execute,
-        )
-        if fallback["matches"]:
-            return fallback
-
-    return response
