@@ -6,3 +6,6 @@ venv/
 .pytest_cache/
 tmp/
 printed_parts.sqlite3*
+docs/
+test_queue.py
+test_sm_codes.py
