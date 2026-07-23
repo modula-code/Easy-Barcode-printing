@@ -61,15 +61,8 @@ ODOO_TIMEOUT=20
 ODOO_REPORT_TIMEOUT=300
 ODOO_CACHE_TTL=300
 MAX_UPLOAD_SIZE_MB=20
-<<<<<<< HEAD
 PRINT_QUEUE_DB_PATH=/data/printed_parts.sqlite3
 APP_TIMEZONE=Asia/Kolkata
-PLANNER_API_URL=https://your-planner-api.example.com/api
-BARCODE_SYNC_TOKEN=the-same-secret-configured-on-planner
-PLANNER_SYNC_TIMEOUT=15
-=======
-PRINT_QUEUE_DB_PATH=printed_parts.sqlite3
->>>>>>> parent of bd6fa16 (added history page)
 PORT=8000
 GUNICORN_THREADS=4
 GUNICORN_TIMEOUT=360
@@ -80,7 +73,6 @@ memory. The supplied configuration uses one worker and four threads.
 
 ## Print queue
 
-<<<<<<< HEAD
 Today's PO label PDFs and printed barcodes are stored in the SQLite file at
 `PRINT_QUEUE_DB_PATH`. Browser refreshes do not clear this data. Queue rows are
 grouped by PO and date; a new day starts with an empty active queue while older
@@ -88,20 +80,10 @@ dates remain available from the queue date picker for viewing and XLSX export.
 Add or replace today's PO label PDFs on `/plans`; operators select the active PO
 from the sidebar on the main print page.
 
-Producing or rejecting a panel is sent to Planner immediately. For production,
-the vendor sends only PO, part code, and quantity; Planner allocates it across
-the PO's SOs in plan-priority order. It also updates associated frame and
-edge-band parts. Retries reuse one event ID, so a lost response cannot
-double-count production.
-
 For Coolify, mount a persistent volume at `/data` and set
 `PRINT_QUEUE_DB_PATH=/data/printed_parts.sqlite3`. Without that volume, a
 container replacement can remove the SQLite file even though normal page
 refreshes and app restarts do not.
-=======
-Printed labels are stored locally in `PRINT_QUEUE_DB_PATH`. The queue page lists
-them for editing or removal and can export the current queue as XLSX.
->>>>>>> parent of bd6fa16 (added history page)
 
 ## API
 

@@ -1,5 +1,4 @@
 import io
-import json
 import os
 import xmlrpc.client
 import zipfile
@@ -33,23 +32,12 @@ from pdf_service import (  # noqa: E402
     get_print_artifact,
     prepare_matching_pages,
 )
-from planner_client import PlannerSyncError, sync_production_event  # noqa: E402
 from queue_store import (  # noqa: E402
     add_printed_part,
-<<<<<<< HEAD
     clear_printed_parts,
-    complete_production_event,
     delete_printed_part,
-    fail_production_event,
-    get_printed_part,
-    get_production_event,
     list_history_dates,
-=======
-    delete_printed_part,
->>>>>>> parent of bd6fa16 (added history page)
     list_printed_parts,
-    list_production_events,
-    stage_production_event,
     update_printed_part,
 )
 
@@ -67,6 +55,14 @@ def index():
 @app.get("/queue")
 def queue_page():
     return render_template("queue.html")
+
+
+@app.get("/history")
+def history_page():
+    return render_template("history.html")
+
+
+
 
 
 @app.get("/healthz")
@@ -262,21 +258,36 @@ def lookup():
     return jsonify(result)
 
 
+
+
+
 @app.get("/api/print-queue")
 def print_queue():
-    return jsonify(list_printed_parts())
+    try:
+        return jsonify(list_printed_parts(request.args.get("date")))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@app.get("/api/history")
+def history_dates():
+    return jsonify(dates=list_history_dates())
 
 
 def _queue_xlsx(rows):
     sheet_rows = [
-        '<row r="1"><c r="A1" t="inlineStr"><is><t>Barcode</t></is></c>'
-        '<c r="B1" t="inlineStr"><is><t>Quantity</t></is></c></row>'
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>Date</t></is></c>'
+        '<c r="B1" t="inlineStr"><is><t>PO Number</t></is></c>'
+        '<c r="C1" t="inlineStr"><is><t>Barcode</t></is></c>'
+        '<c r="D1" t="inlineStr"><is><t>Quantity</t></is></c></row>'
     ]
     for row_number, item in enumerate(rows, 2):
         sheet_rows.append(
             f'<row r="{row_number}">'
-            f'<c r="A{row_number}" t="inlineStr"><is><t>{escape(str(item.get("part_code", "")))}</t></is></c>'
-            f'<c r="B{row_number}"><v>{int(item.get("quantity") or 0)}</v></c>'
+            f'<c r="A{row_number}" t="inlineStr"><is><t>{escape(str(item.get("work_date", "")))}</t></is></c>'
+            f'<c r="B{row_number}" t="inlineStr"><is><t>{escape(str(item.get("po_number", "")))}</t></is></c>'
+            f'<c r="C{row_number}" t="inlineStr"><is><t>{escape(str(item.get("part_code", "")))}</t></is></c>'
+            f'<c r="D{row_number}"><v>{int(item.get("quantity") or 0)}</v></c>'
             "</row>"
         )
 
@@ -315,123 +326,31 @@ def _queue_xlsx(rows):
 
 @app.get("/api/print-queue/export.xlsx")
 def export_print_queue_xlsx():
-    rows = list_printed_parts()["items"]
+    try:
+        queue = list_printed_parts(request.args.get("date"))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
     return send_file(
-        _queue_xlsx(rows),
+        _queue_xlsx(queue["items"]),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
-        download_name="print-queue.xlsx",
+        download_name=f"print-queue-{queue['date']}.xlsx",
         max_age=0,
     )
-
-
-def _push_to_planner(event):
-    """Send a staged event to Planner and apply its answer to the local queue.
-
-    Returns (item, synced). Raises PlannerSyncError / ValueError, already
-    recorded on the event so the ledger can show and retry the failure."""
-    try:
-        if event["status"] == "synced" and event["planner_response"]:
-            synced = json.loads(event["planner_response"])
-        else:
-            payload = {
-                "eventId": event["event_id"],
-                "poNumber": event["po_number"],
-                "partCode": event["part_code"],
-                "quantity": event["quantity"],
-                "action": event["action"],
-                "workDate": event["work_date"],
-            }
-            if event["planner_plan_id"]:
-                payload["planId"] = event["planner_plan_id"]
-            if event["so_number"]:
-                payload["soNumber"] = event["so_number"]
-            synced = sync_production_event(payload)
-        return complete_production_event(event["event_id"], synced), synced
-    except (PlannerSyncError, ValueError) as exc:
-        fail_production_event(event["event_id"], str(exc))
-        raise
 
 
 @app.post("/api/print-queue")
 def add_print_queue_item():
     payload = request.get_json(silent=True) or {}
     try:
-        event = stage_production_event(
-            str(payload.get("event_id", "")),
-            "produced",
-            str(payload.get("po_number", "")),
-            "",
+        item = add_printed_part(
             str(payload.get("part_code", "")),
             payload.get("quantity", 1),
-<<<<<<< HEAD
-            str(payload.get("work_date", "")),
-=======
->>>>>>> parent of bd6fa16 (added history page)
+            str(payload.get("po_number", "")),
         )
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
-    try:
-        item, synced = _push_to_planner(event)
-    except PlannerSyncError as exc:
-        return jsonify(error=str(exc)), exc.status_code
-    except ValueError as exc:
-        return jsonify(error=str(exc)), 500
-    return jsonify(item=item, sync=synced), 201
-
-
-@app.post("/api/print-queue/<int:item_id>/reject")
-def reject_print_queue_item(item_id):
-    payload = request.get_json(silent=True) or {}
-    try:
-        item = get_printed_part(item_id)
-        event = stage_production_event(
-            str(payload.get("event_id", "")),
-            "rejected",
-            item["po_number"],
-            item["so_number"],
-            item["part_code"],
-            payload.get("quantity", 1),
-            item["work_date"],
-            planner_plan_id=item["planner_plan_id"],
-            target_row_id=item_id,
-        )
-    except ValueError as exc:
-        return jsonify(error=str(exc)), 400
-    try:
-        item, synced = _push_to_planner(event)
-    except PlannerSyncError as exc:
-        return jsonify(error=str(exc)), exc.status_code
-    except ValueError as exc:
-        return jsonify(error=str(exc)), 500
-    return jsonify(item=item, sync=synced)
-
-
-@app.get("/api/production-events")
-def production_events():
-    try:
-        return jsonify(list_production_events(request.args.get("date")))
-    except ValueError as exc:
-        return jsonify(error=str(exc)), 400
-
-
-@app.post("/api/production-events/<event_id>/retry")
-def retry_production_event(event_id):
-    """Resend an event Planner never accepted. The event id is unchanged, so
-    Planner replays it instead of double-counting if it did land."""
-    try:
-        event = get_production_event(event_id)
-    except ValueError as exc:
-        return jsonify(error=str(exc)), 404
-    if event["status"] == "synced":
-        return jsonify(error="That event is already synced with Planner."), 409
-    try:
-        item, synced = _push_to_planner(event)
-    except PlannerSyncError as exc:
-        return jsonify(error=str(exc)), exc.status_code
-    except ValueError as exc:
-        return jsonify(error=str(exc)), 500
-    return jsonify(item=item, sync=synced)
+    return jsonify(item=item), 201
 
 
 @app.put("/api/print-queue/<int:item_id>")
@@ -440,6 +359,7 @@ def update_print_queue_item(item_id):
     try:
         item = update_printed_part(
             item_id,
+            str(payload.get("po_number", "")),
             str(payload.get("part_code", "")),
             payload.get("quantity", 1),
         )
@@ -455,6 +375,11 @@ def delete_print_queue_item(item_id):
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     return jsonify(ok=True)
+
+
+@app.delete("/api/print-queue")
+def clear_print_queue():
+    return jsonify(ok=True, cleared=clear_printed_parts())
 
 
 @app.get("/print/<token>")

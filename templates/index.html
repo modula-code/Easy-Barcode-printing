@@ -42,7 +42,7 @@
             }
 
             main {
-                width: min(720px, calc(100% - 20px));
+                width: min(800px, calc(100% - 20px));
                 margin: 24px auto;
             }
 
@@ -89,7 +89,6 @@
                 gap: 14px;
             }
 
-            .field:first-child,
             .field.full-width {
                 grid-column: 1 / -1;
             }
@@ -101,7 +100,8 @@
                 font-weight: 700;
             }
 
-            input {
+            input,
+            select {
                 width: 100%;
                 min-height: 56px;
                 padding: 12px 14px;
@@ -136,7 +136,8 @@
                 font-weight: 650;
             }
 
-            input:focus {
+            input:focus,
+            select:focus {
                 outline: none;
                 border-color: var(--primary);
                 box-shadow: 0 0 0 3px rgba(107, 75, 65, 0.18);
@@ -331,7 +332,7 @@
                 display: none !important;
             }
 
-            @media (max-width: 580px) {
+            @media (max-width: 760px) {
                 main {
                     margin: 24px auto;
                 }
@@ -339,7 +340,6 @@
                 .match {
                     grid-template-columns: 1fr;
                 }
-                .field:first-child,
                 .field.full-width {
                     grid-column: auto;
                 }
@@ -376,14 +376,21 @@
                         rel="noopener"
                         >Queue</a
                     >
+                    <a
+                        class="top-link"
+                        href="{{ url_for('history_page') }}"
+                        target="_blank"
+                        rel="noopener"
+                        >History</a
+                    >
                 </header>
                 <p class="intro">
-                    Scan or enter the PO and SM codes. Planner assigns production by SO priority.
+                    Scan or enter the PO and SM codes, then find the label.
                 </p>
 
                 <form id="lookup-form">
                     <div class="form-grid">
-                        <div class="field">
+                        <div class="field full-width">
                             <label for="po-number">PO number</label>
                             <input
                                 id="po-number"
@@ -428,16 +435,6 @@
                                 type="text"
                                 autocomplete="off"
                                 autocapitalize="characters"
-                            />
-                        </div>
-
-                        <div class="field full-width">
-                            <label for="work-date">Work date</label>
-                            <input
-                                id="work-date"
-                                name="work_date"
-                                type="date"
-                                required
                             />
                         </div>
 
@@ -499,7 +496,6 @@
             let fetchedLabelFile = null;
             let poSuggestionTimer = 0;
             let poSuggestionController = null;
-            let resolvedPoNumber = "";
 
             function unlockFetchedLabel(text) {
                 fetchedLabelFile = null;
@@ -511,6 +507,7 @@
                     fetchLabelResult.textContent = text;
                 }
             }
+
 
             async function loadPoSuggestions() {
                 const query = poInput.value.trim().toUpperCase();
@@ -572,8 +569,7 @@
                     fetchLabelButton.textContent = "Label PDF fetched";
                 } catch (error) {
                     unlockFetchedLabel();
-                    fetchLabelResult.textContent =
-                        error.message || "Fetch failed.";
+                    fetchLabelResult.textContent = error.message || "Fetch failed.";
                 } finally {
                     if (!fetchedLabelFile) {
                         fetchLabelButton.disabled = false;
@@ -587,10 +583,8 @@
             // alternate 1 -> 2 -> 1 so the newest two scans are kept.
             const code1Input = document.querySelector("#code-1");
             const code2Input = document.querySelector("#code-2");
-            const workDateInput = document.querySelector("#work-date");
 
-            // Keep typed fields across navigation/reloads. The PDF and
-            // lookup results cannot be restored; fetch and search again.
+            // Keep scanned codes across navigation and reloads.
             const FIELDS_KEY = "barcode-print-fields";
 
             function saveFields() {
@@ -622,18 +616,16 @@
             let scanFocusValue = "";
             let scanOverrideSlot = 0;
 
-            // Mirrors normalize_sm_code() in odoo_client.py. Labels carry a
-            // bare "B313-AD", so "SM-" is always added. Idempotent: this runs
-            // on scan and again on submit.
             function normalizeSmCode(value) {
                 let parts = String(value || "")
                     .toUpperCase()
                     .split("-")
                     .map((part) => part.trim());
-                if (parts[0] === "SM") parts = parts.slice(1);
-                parts = parts.filter(Boolean);
-                if (!parts.length) return "";
-                if (parts.length !== 2) return `SM-${parts.join("-")}`;
+                const hadSm = parts[0] === "SM";
+                if (hadSm) parts = parts.slice(1);
+                if (parts.length !== 2) {
+                    return `${hadSm ? "SM-" : ""}${parts.join("-")}`;
+                }
 
                 const isMainCode = (part) =>
                     /^\d+$/.test(part) || /^[A-Z]\d+$/.test(part);
@@ -641,7 +633,9 @@
                 if (isMainCode(second) && /^[A-Z]{2}$/.test(first)) {
                     [first, second] = [second, first];
                 }
-                return `SM-${first}-${second}`;
+                return isMainCode(first) && /^[A-Z]{2}$/.test(second)
+                    ? `SM-${first}-${second}`
+                    : `${hadSm ? "SM-" : ""}${parts.join("-")}`;
             }
 
             function fillScannedCode(code) {
@@ -692,6 +686,7 @@
 
             poInput.addEventListener("input", () => {
                 saveFields();
+                clearActivePlan();
                 if (fetchedLabelFile) {
                     unlockFetchedLabel("PO changed. Fetch the label PDF again.");
                 }
@@ -705,11 +700,9 @@
                 }
             });
 
+
             checkPoButton.addEventListener("click", async () => {
-                const poNumber = document
-                    .querySelector("#po-number")
-                    .value.trim()
-                    .toUpperCase();
+                const poNumber = poInput.value.trim().toUpperCase();
                 if (!poNumber) {
                     poCheckResult.hidden = false;
                     poCheckResult.textContent = "Enter a PO number first.";
@@ -727,7 +720,7 @@
                     if (!response.ok) {
                         throw new Error(data.error || "Lookup failed.");
                     }
-                    poCheckResult.textContent = `${data.po_number}: PO found`;
+                    poCheckResult.textContent = `${data.po_number}: SO ${data.partner_ref ?? "(empty)"}`;
                 } catch (error) {
                     poCheckResult.textContent = error.message || "Lookup failed.";
                 } finally {
@@ -757,34 +750,20 @@
                 message.hidden = false;
             }
 
-            function newEventId() {
-                if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-                return `event-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-            }
-
-            async function addPrintedPartToQueue(match, quantity, eventId) {
-                if (!resolvedPoNumber) {
-                    throw new Error("Enter a PO before production can sync.");
-                }
+            async function addPrintedPartToQueue(match, quantity, printUrl) {
                 const response = await fetch("/api/print-queue", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
-<<<<<<< HEAD
-                        event_id: eventId,
-                        po_number: resolvedPoNumber,
-=======
->>>>>>> parent of bd6fa16 (added history page)
+                        po_number: poInput.value.trim().toUpperCase(),
                         part_code: match.part_code,
                         quantity,
-                        work_date: workDateInput.value,
                     }),
                 });
                 const data = await response.json();
                 if (!response.ok) {
-                    throw new Error(data.error || "Could not sync production.");
+                    throw new Error(data.error || "Could not add to queue.");
                 }
-                return data;
             }
 
             function queuedPrintLink(match, href, quantity, text, secondary = false) {
@@ -798,22 +777,14 @@
                 link.textContent = text;
                 link.addEventListener("click", async (event) => {
                     event.preventDefault();
-                    if (!workDateInput.reportValidity()) return;
-                    const eventKey = `production-event:${workDateInput.value}:${resolvedPoNumber}:${match.part_code}:${quantity}`;
-                    const eventId = sessionStorage.getItem(eventKey) || newEventId();
                     const printWindow = window.open("about:blank", "_blank");
                     if (printWindow) {
                         printWindow.opener = null;
                     }
                     try {
-                        sessionStorage.setItem(eventKey, eventId);
-                        const data = await addPrintedPartToQueue(match, quantity, eventId);
-                        sessionStorage.removeItem(eventKey);
-                        const associated = (data.sync?.associated || [])
-                            .map((item) => `${item.code} x ${item.quantity}`)
-                            .join(", ");
+                        await addPrintedPartToQueue(match, quantity, href);
                         showMessage(
-                            `Synced ${match.part_code} x ${quantity}${associated ? `; associated ${associated}` : ""}.`,
+                            `Queued ${match.part_code} x ${quantity}. Open Queue to review or export.`,
                         );
                         if (printWindow) {
                             printWindow.location = href;
@@ -825,7 +796,7 @@
                             printWindow.close();
                         }
                         showMessage(
-                            error.message || "Could not sync production.",
+                            error.message || "Could not add to queue.",
                             true,
                         );
                     }
@@ -834,8 +805,6 @@
             }
 
             function renderResults(data) {
-                resolvedPoNumber = String(data.po_number || "").trim().toUpperCase();
-                if (resolvedPoNumber) poInput.value = resolvedPoNumber;
                 results.replaceChildren();
                 let renderedAny = false;
 
@@ -879,19 +848,19 @@
                             match,
                             match.document_match.print_url,
                             1,
-                            "Print and record 1",
+                            "Print",
                         );
-                        documentStatus.append(printLink);
+                        documentStatus.appendChild(printLink);
 
                         if (match.document_match.matching_page_count > 1) {
                             const printAllLink = queuedPrintLink(
                                 match,
                                 match.document_match.all_print_url,
                                 match.document_match.matching_page_count,
-                                `Print and record all quantity (${match.document_match.matching_page_count})`,
+                                `Print all (${match.document_match.matching_page_count})`,
                                 true,
                             );
-                            documentStatus.append(printAllLink);
+                            documentStatus.appendChild(printAllLink);
                         }
                     } else {
                         documentStatus.textContent = `Part code ${match.part_code} was not found in the uploaded PDF.`;
