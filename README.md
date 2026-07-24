@@ -78,7 +78,7 @@ add it to the Planner's Compose stack.
 - Compose location: `/docker-compose.yml`
 - Public service: `barcode`, internal port `8000`
 - Health-check path: `/healthz`
-- Persistent data: named volume `barcode_pgdata` on the bundled `db` service
+- Persistent data: named volume `barcode_pgdata_v2` on the bundled `db` service
 
 Set these environment variables in Coolify:
 
@@ -126,7 +126,7 @@ memory. The supplied configuration uses one worker and four threads.
 
 `POSTGRES_PASSWORD` is only read when Postgres initialises its data directory.
 Changing it later in Coolify does not change the password inside an existing
-`barcode_pgdata` volume, and the app will then fail to authenticate; change it
+`barcode_pgdata_v2` volume, and the app will then fail to authenticate; change it
 with `ALTER ROLE` in the running database instead.
 
 ## Print queue
@@ -143,7 +143,7 @@ Prints are recorded in the local queue by default. Set
 production and rejection events to a configured Planner API.
 
 The standalone `docker-compose.yml` runs its own `db` service backed by the
-`barcode_pgdata` volume, so redeploying the container preserves the queue and
+`barcode_pgdata_v2` volume, so redeploying the container preserves the queue and
 history. To use a managed Postgres instead, drop the `db` service and set
 `DATABASE_URL` to the managed connection string.
 

@@ -2,7 +2,7 @@
 # Compose resource; it is intentionally not part of the Planner compose stack.
 #
 # To use a managed Postgres instead of the bundled one: delete the `db` service,
-# its `depends_on` block and the `barcode_pgdata` volume, then set DATABASE_URL
+# its `depends_on` block and the `barcode_pgdata_v2` volume, then set DATABASE_URL
 # in the environment to the managed connection string.
 services:
   db:
@@ -12,7 +12,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB:-barcode}
     volumes:
-      - barcode_pgdata:/var/lib/postgresql/data
+      - barcode_pgdata_v2:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-barcode} -d ${POSTGRES_DB:-barcode}"]
       interval: 10s
@@ -59,4 +59,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  barcode_pgdata:
+  barcode_pgdata_v2:
