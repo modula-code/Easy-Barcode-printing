@@ -34,7 +34,8 @@ cp .env.example .env
 createdb barcode
 ```
 
-Fill in the Odoo values and `DATABASE_URL` in `.env`, then run:
+Fill in the Odoo values in `.env`. The example `DATABASE_URL` connects to the
+local `barcode` database as your current PostgreSQL user. Then run:
 
 ```bash
 python app.py

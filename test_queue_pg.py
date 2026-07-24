@@ -176,6 +176,30 @@ class QueuePostgresTest(unittest.TestCase):
                 target_row_id=row["id"],
             )
 
+    def test_legacy_production_events_table_gains_sequence_column(self):
+        with queue_store._connect() as connection:
+            connection.execute("SAVEPOINT legacy_schema")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO production_events
+                        (event_id, action, po_number, so_number, part_code,
+                         quantity, work_date, created_at, updated_at)
+                    VALUES
+                        ('event-legacy-1', 'produced', 'PO-1', '', 'PANEL-1',
+                         1, '2026-07-25', '2026-07-25T00:00:00+00:00',
+                         '2026-07-25T00:00:00+00:00')
+                    """
+                )
+                connection.execute("ALTER TABLE production_events DROP COLUMN seq")
+                queue_store._ensure_schema(connection)
+                row = connection.execute(
+                    "SELECT seq FROM production_events WHERE event_id = 'event-legacy-1'"
+                ).fetchone()
+                self.assertIsInstance(row["seq"], int)
+            finally:
+                connection.execute("ROLLBACK TO SAVEPOINT legacy_schema")
+
 
 if __name__ == "__main__":
     unittest.main()
