@@ -3,3 +3,4 @@ gunicorn
 python-dotenv
 pypdf
 reportlab
+psycopg[binary,pool]

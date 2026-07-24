@@ -31,24 +31,53 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+createdb barcode
 ```
 
-Fill in the Odoo values in `.env`, then run:
+Fill in the Odoo values and `DATABASE_URL` in `.env`, then run:
 
 ```bash
 python app.py
 ```
 
-Open <http://127.0.0.1:5000>.
+Open <http://127.0.0.1:5000>. The tables are created on first use; there is no
+separate migration step for a fresh database.
+
+### Migrating an existing SQLite queue
+
+Installations from before the Postgres switch keep their data in
+`printed_parts.sqlite3`. Copy it across once, after `DATABASE_URL` points at the
+new empty database:
+
+```bash
+python migrate_sqlite_to_pg.py printed_parts.sqlite3
+```
+
+Row IDs are preserved and the script is idempotent, so a partial run can simply
+be repeated.
+
+On an existing Coolify deployment the old queue lives in the `barcode_data`
+volume, which this Compose file no longer mounts. Carry it across **before**
+dropping that volume: temporarily add `barcode_data:/data` back to the `barcode`
+service (and to the top-level `volumes:`), deploy, then run
+
+```bash
+python migrate_sqlite_to_pg.py /data/printed_parts.sqlite3
+```
+
+in the container. Confirm the queue and history pages look right, then remove
+the two `barcode_data` lines and redeploy. Skipping this strands the old queue
+in an unreferenced Docker volume.
 
 ## Coolify deployment
 
-Deploy this repository as a Coolify Application using the **Dockerfile** build
-pack.
+Deploy this repository as its own Coolify **Docker Compose** resource. Do not
+add it to the Planner's Compose stack.
 
-- Dockerfile location: `/Dockerfile`
-- Exposed port: `8000`
+- Compose location: `/docker-compose.yml`
+- Public service: `barcode`, port `8000`
 - Health-check path: `/healthz`
+- Persistent data: named volume `barcode_pgdata` on the bundled `db` service
 
 Set these environment variables in Coolify:
 
@@ -61,8 +90,12 @@ ODOO_TIMEOUT=20
 ODOO_REPORT_TIMEOUT=300
 ODOO_CACHE_TTL=300
 MAX_UPLOAD_SIZE_MB=20
-PRINT_QUEUE_DB_PATH=/data/printed_parts.sqlite3
+POSTGRES_USER=barcode
+POSTGRES_PASSWORD=a-strong-password
+POSTGRES_DB=barcode
+DB_POOL_SIZE=5
 APP_TIMEZONE=Asia/Kolkata
+PLANNER_SYNC_ENABLED=true
 PLANNER_API_URL=https://your-planner-api.example.com/api
 BARCODE_SYNC_TOKEN=the-same-secret-configured-on-planner
 PLANNER_SYNC_TIMEOUT=15
@@ -74,10 +107,15 @@ GUNICORN_TIMEOUT=360
 Keep one Gunicorn worker because generated print artifacts are held in process
 memory. The supplied configuration uses one worker and four threads.
 
+`POSTGRES_PASSWORD` is only read when Postgres initialises its data directory.
+Changing it later in Coolify does not change the password inside an existing
+`barcode_pgdata` volume, and the app will then fail to authenticate; change it
+with `ALTER ROLE` in the running database instead.
+
 ## Print queue
 
-Today's PO label PDFs and printed barcodes are stored in the SQLite file at
-`PRINT_QUEUE_DB_PATH`. Browser refreshes do not clear this data. Queue rows are
+Today's PO label PDFs and printed barcodes are stored in the Postgres database at
+`DATABASE_URL`. Browser refreshes do not clear this data. Queue rows are
 grouped by PO and date; a new day starts with an empty active queue while older
 dates remain available from the queue date picker for viewing and XLSX export.
 Add or replace today's PO label PDFs on `/plans`; operators select the active PO
@@ -87,10 +125,23 @@ Prints are recorded in the local queue by default. Set
 `PLANNER_SYNC_ENABLED=true` only when this app should synchronously send
 production and rejection events to a configured Planner API.
 
-For Coolify, mount a persistent volume at `/data` and set
-`PRINT_QUEUE_DB_PATH=/data/printed_parts.sqlite3`. Without that volume, a
-container replacement can remove the SQLite file even though normal page
-refreshes and app restarts do not.
+The standalone `docker-compose.yml` runs its own `db` service backed by the
+`barcode_pgdata` volume, so redeploying the container preserves the queue and
+history. To use a managed Postgres instead, drop the `db` service and set
+`DATABASE_URL` to the managed connection string.
+
+Queue writes are serialised by a Postgres advisory lock rather than an
+in-process mutex, so correctness no longer depends on running a single worker.
+The Gunicorn config still pins one worker because generated print artifacts are
+cached in process memory.
+
+To run the queue tests, point them at a scratch database — they truncate the
+tables between cases:
+
+```bash
+createdb barcode_test
+TEST_DATABASE_URL=postgresql:///barcode_test python -m unittest test_queue_pg
+```
 
 ## API
 

@@ -1,0 +1,62 @@
+# Barcode station only. Deploy this repository as its own Coolify Docker
+# Compose resource; it is intentionally not part of the Planner compose stack.
+#
+# To use a managed Postgres instead of the bundled one: delete the `db` service,
+# its `depends_on` block and the `barcode_pgdata` volume, then set DATABASE_URL
+# in the environment to the managed connection string.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-barcode}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-barcode}
+    volumes:
+      - barcode_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-barcode} -d ${POSTGRES_DB:-barcode}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  barcode:
+    build:
+      context: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - SERVICE_FQDN_BARCODE_8000
+      - PORT=8000
+      # URL-encode the password if it contains @ : / ? or #
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-barcode}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-barcode}
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-5}
+      - APP_TIMEZONE=${APP_TIMEZONE:-Asia/Kolkata}
+      - MAX_UPLOAD_SIZE_MB=${MAX_UPLOAD_SIZE_MB:-20}
+      - PLANNER_SYNC_ENABLED=${PLANNER_SYNC_ENABLED:-true}
+      - PLANNER_API_URL=${PLANNER_API_URL:?set the Planner API base URL, including /api}
+      - BARCODE_SYNC_TOKEN=${BARCODE_SYNC_TOKEN:?must match the Planner BARCODE_SYNC_TOKEN}
+      - PLANNER_SYNC_TIMEOUT=${PLANNER_SYNC_TIMEOUT:-15}
+      - ODOO_URL=${ODOO_URL:?set ODOO_URL}
+      - ODOO_DB=${ODOO_DB:?set ODOO_DB}
+      - ODOO_USERNAME=${ODOO_USERNAME:?set ODOO_USERNAME}
+      - ODOO_PASSWORD=${ODOO_PASSWORD:?set ODOO_PASSWORD}
+      - ODOO_TIMEOUT=${ODOO_TIMEOUT:-20}
+      - ODOO_REPORT_TIMEOUT=${ODOO_REPORT_TIMEOUT:-300}
+      - ODOO_CACHE_TTL=${ODOO_CACHE_TTL:-300}
+      - GUNICORN_THREADS=${GUNICORN_THREADS:-4}
+      - GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-360}
+    ports:
+      - "${BARCODE_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  barcode_pgdata:
