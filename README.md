@@ -75,7 +75,7 @@ Deploy this repository as its own Coolify **Docker Compose** resource. Do not
 add it to the Planner's Compose stack.
 
 - Compose location: `/docker-compose.yml`
-- Public service: `barcode`, port `8000`
+- Public service: `barcode`, internal port `8000`
 - Health-check path: `/healthz`
 - Persistent data: named volume `barcode_pgdata` on the bundled `db` service
 
@@ -103,6 +103,22 @@ PORT=8000
 GUNICORN_THREADS=4
 GUNICORN_TIMEOUT=360
 ```
+
+To enable Planner sync, configure the same long random `BARCODE_SYNC_TOKEN`
+in both Coolify resources:
+
+```text
+# Barcode resource
+PLANNER_SYNC_ENABLED=true
+PLANNER_API_URL=https://your-planner-api.example.com/api
+BARCODE_SYNC_TOKEN=the-shared-secret
+
+# Planner resource
+BARCODE_SYNC_TOKEN=the-same-shared-secret
+```
+
+Keep `/api` at the end of `PLANNER_API_URL`. The Barcode app sends events to
+`${PLANNER_API_URL}/tracking/barcode-events`.
 
 Keep one Gunicorn worker because generated print artifacts are held in process
 memory. The supplied configuration uses one worker and four threads.

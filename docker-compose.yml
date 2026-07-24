@@ -48,8 +48,8 @@ services:
       - ODOO_CACHE_TTL=${ODOO_CACHE_TTL:-300}
       - GUNICORN_THREADS=${GUNICORN_THREADS:-4}
       - GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-360}
-    ports:
-      - "${BARCODE_PORT:-8000}:8000"
+    expose:
+      - "8000"
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/healthz || exit 1"]
       interval: 30s
