@@ -154,8 +154,8 @@ def get_printed_part(row_id: int) -> dict:
     with _queue_lock, closing(_connect()) as connection, connection:
         _ensure_schema(connection)
         row = connection.execute(
-            "SELECT * FROM printed_parts WHERE id = ? AND work_date = ?",
-            (row_id, current_work_date()),
+            "SELECT * FROM printed_parts WHERE id = ?",
+            (row_id,),
         ).fetchone()
     if not row:
         raise ValueError("Queue row was not found.")
@@ -212,7 +212,7 @@ def stage_production_event(
                 (target_row_id, work_date),
             ).fetchone()
             if not row or row["status"] != "synced" or int(row["quantity"]) < qty:
-                raise ValueError("Rejected quantity exceeds the synced good quantity.")
+                raise ValueError("Rejected quantity exceeds the synced panel quantity.")
         connection.execute(
             """
             INSERT INTO production_events
@@ -349,7 +349,7 @@ def complete_production_event(event_id: str, planner_response: dict) -> dict | N
                 (row_id,),
             ).fetchone()
             if not row or int(row["quantity"]) < int(event["quantity"]):
-                raise ValueError("Rejected quantity exceeds the synced good quantity.")
+                raise ValueError("Rejected quantity exceeds the synced panel quantity.")
             connection.execute(
                 "UPDATE printed_parts SET quantity = quantity - ? WHERE id = ?",
                 (event["quantity"], row_id),
@@ -490,7 +490,7 @@ def list_printed_parts(work_date: str | None = None) -> dict:
         rows = connection.execute(
             """
             SELECT * FROM printed_parts
-            WHERE work_date = ? AND status IN ('queued', 'error', 'synced')
+            WHERE work_date = ? AND status IN ('queued', 'error', 'pushed', 'synced')
               AND quantity > 0
             ORDER BY id DESC
             """,

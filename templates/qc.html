@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Panel Quality Control</title>
+        <link
+            rel="stylesheet"
+            href="{{ url_for('static', filename='workflow.css') }}"
+        />
+    </head>
+    <body>
+        <header class="app-header">
+            <div class="header-inner">
+                <a class="brand" href="/">
+                    <img
+                        src="{{ url_for('static', filename='logo.svg') }}"
+                        alt="Modula SW Enterprise"
+                    />
+                    <span class="brand-label">Barcode control</span>
+                </a>
+                <nav class="nav" aria-label="Barcode workflow">
+                    <a href="/">Label printing</a>
+                    <a href="/queue">Queue</a>
+                    <a href="/qc" aria-current="page">QC</a>
+                    <a href="/history">History</a>
+                </nav>
+            </div>
+        </header>
+
+        <main class="workspace">
+            <section class="hero">
+                <div>
+                    <p class="eyebrow">Quality correction</p>
+                    <h1>Panel QC</h1>
+                    <p class="lede">
+                        Reject part of a panel quantity or remove a panel code completely.
+                        Planner-synced panels are reversed in Planner and kept in History;
+                        panels not yet synced are edited in the local queue.
+                    </p>
+                </div>
+                <div class="hero-actions">
+                    <a class="button secondary" href="/queue">View queue</a>
+                    <a class="button secondary" href="/history">View history</a>
+                </div>
+            </section>
+
+            <section class="metrics" aria-label="QC summary">
+                <div class="metric">
+                    <span class="metric-label">Available panels</span>
+                    <strong id="panel-quantity" class="metric-value">—</strong>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Panel codes</span>
+                    <strong id="panel-codes" class="metric-value">—</strong>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Work date</span>
+                    <strong id="work-date" class="metric-value">—</strong>
+                </div>
+            </section>
+
+            <p id="status" class="status" aria-live="polite"></p>
+
+            <section class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h2>Panels for QC</h2>
+                        <p>
+                            Use Reduce for a partial rejection, or Remove panel
+                            code to reject the complete available quantity. Panels
+                            tagged Local are not synced and edit the queue only.
+                        </p>
+                    </div>
+                    <div class="filter-row">
+                        <label class="field">
+                            <span>Work date</span>
+                            <input id="qc-date" type="date" />
+                        </label>
+                        <label class="field search">
+                            <span>Find PO, SO or panel code</span>
+                            <input
+                                id="search"
+                                type="search"
+                                placeholder="Scan or type to filter"
+                                autocomplete="off"
+                            />
+                        </label>
+                    </div>
+                </div>
+                <div class="panel-body">
+                    <p id="qc-notice" class="notice">
+                        Checking Planner availability…
+                    </p>
+                </div>
+                <div id="qc-records" class="records" aria-live="polite"></div>
+            </section>
+        </main>
+
+        <script>
+            const records = document.querySelector("#qc-records");
+            const searchInput = document.querySelector("#search");
+            const dateInput = document.querySelector("#qc-date");
+            const statusText = document.querySelector("#status");
+            const qcNotice = document.querySelector("#qc-notice");
+            let panels = [];
+
+            function showStatus(message, isError = false) {
+                statusText.textContent = message;
+                statusText.className = `status${isError ? " error" : ""}`;
+            }
+
+            function newEventId() {
+                if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+                return `event-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            }
+
+            async function requestJson(url, options) {
+                const response = await fetch(url, options);
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || "Request failed.");
+                return data;
+            }
+
+            function emptyState(title, text) {
+                const empty = document.createElement("p");
+                const strong = document.createElement("strong");
+                empty.className = "empty";
+                strong.textContent = title;
+                empty.append(strong, document.createTextNode(text));
+                return empty;
+            }
+
+            async function submitRejection(item, quantity, button) {
+                const eventKey = `qc-event:${item.id}`;
+                const quantityKey = `qc-quantity:${item.id}`;
+                const pendingQuantity = Number(sessionStorage.getItem(quantityKey)) || 0;
+                if (pendingQuantity && pendingQuantity !== quantity) {
+                    throw new Error(
+                        `Retry the pending correction for quantity ${pendingQuantity} first.`,
+                    );
+                }
+
+                const eventId = sessionStorage.getItem(eventKey) || newEventId();
+                sessionStorage.setItem(eventKey, eventId);
+                sessionStorage.setItem(quantityKey, String(quantity));
+                button.disabled = true;
+                try {
+                    const result = await requestJson(
+                        `/api/print-queue/${item.id}/reject`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                event_id: eventId,
+                                quantity,
+                            }),
+                        },
+                    );
+                    sessionStorage.removeItem(eventKey);
+                    sessionStorage.removeItem(quantityKey);
+                    const associated = (result.sync?.associated || [])
+                        .map((part) => `${part.code} × ${part.quantity}`)
+                        .join(", ");
+                    showStatus(
+                        `${item.part_code} reduced by ${quantity}` +
+                            `${associated ? `; also reversed ${associated}` : ""}.`,
+                    );
+                    await load(item.work_date);
+                } finally {
+                    button.disabled = false;
+                }
+            }
+
+            // Not-yet-synced panels live only in the local queue, so QC edits them
+            // in place (PUT to reduce, DELETE to remove) instead of reversing Planner.
+            async function reduceLocal(item, quantity, button) {
+                button.disabled = true;
+                try {
+                    await requestJson(`/api/print-queue/${item.id}`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            po_number: item.po_number,
+                            part_code: item.part_code,
+                            quantity: item.quantity - quantity,
+                        }),
+                    });
+                    showStatus(`${item.part_code} reduced by ${quantity} in the local queue.`);
+                    await load(item.work_date);
+                } finally {
+                    button.disabled = false;
+                }
+            }
+
+            async function removeLocal(item, button) {
+                button.disabled = true;
+                try {
+                    await requestJson(`/api/print-queue/${item.id}`, { method: "DELETE" });
+                    showStatus(`${item.part_code} removed from the local queue.`);
+                    await load(item.work_date);
+                } finally {
+                    button.disabled = false;
+                }
+            }
+
+            function render() {
+                records.replaceChildren();
+                const query = searchInput.value.trim().toUpperCase();
+                const visible = panels.filter((item) =>
+                    [item.part_code, item.po_number, item.so_number]
+                        .join(" ")
+                        .toUpperCase()
+                        .includes(query),
+                );
+
+                if (!visible.length) {
+                    records.append(
+                        emptyState(
+                            query ? "No matching panels." : "No panels available for QC.",
+                            query
+                                ? " Try another PO, SO or panel code."
+                                : " Panels appear here once queued or recorded to Planner.",
+                        ),
+                    );
+                    return;
+                }
+
+                for (const item of visible) {
+                    const row = document.createElement("article");
+                    const code = document.createElement("div");
+                    const meta = document.createElement("div");
+                    const quantity = document.createElement("div");
+                    const actions = document.createElement("div");
+                    const field = document.createElement("label");
+                    const caption = document.createElement("span");
+                    const input = document.createElement("input");
+                    const reduce = document.createElement("button");
+                    const remove = document.createElement("button");
+                    const pendingQuantity =
+                        Number(sessionStorage.getItem(`qc-quantity:${item.id}`)) || 0;
+
+                    row.className = "record qc-record";
+                    code.className = "record-code";
+                    meta.className = "record-meta";
+                    quantity.className = "record-quantity";
+                    actions.className = "qc-actions";
+                    field.className = "field";
+                    const synced = item.status === "synced";
+                    code.textContent = item.part_code;
+                    meta.textContent =
+                        `${item.po_number}${item.so_number ? ` · ${item.so_number}` : ""}` +
+                        (synced ? "" : " · Local");
+                    quantity.append(
+                        document.createTextNode(item.quantity),
+                        Object.assign(document.createElement("small"), {
+                            textContent: "available",
+                        }),
+                    );
+
+                    caption.textContent = "Reject qty";
+                    input.type = "number";
+                    input.min = "1";
+                    input.max = String(Math.max(1, item.quantity - 1));
+                    input.step = "1";
+                    input.inputMode = "numeric";
+                    input.placeholder = item.quantity > 1 ? "1" : "—";
+                    input.disabled = item.quantity < 2;
+                    if (pendingQuantity && pendingQuantity < item.quantity) {
+                        input.value = String(pendingQuantity);
+                    }
+                    field.append(caption, input);
+
+                    reduce.type = "button";
+                    reduce.className = "secondary";
+                    reduce.textContent = "Reduce quantity";
+                    reduce.disabled = item.quantity < 2;
+                    reduce.addEventListener("click", async () => {
+                        const rejected = Number(input.value);
+                        if (
+                            !Number.isInteger(rejected) ||
+                            rejected < 1 ||
+                            rejected >= item.quantity
+                        ) {
+                            showStatus(
+                                `Enter a quantity from 1 to ${item.quantity - 1}.`,
+                                true,
+                            );
+                            input.focus();
+                            return;
+                        }
+                        if (
+                            !confirm(
+                                `Reduce ${item.part_code} from ${item.quantity} to ${item.quantity - rejected}?`,
+                            )
+                        )
+                            return;
+                        try {
+                            if (synced) await submitRejection(item, rejected, reduce);
+                            else await reduceLocal(item, rejected, reduce);
+                        } catch (error) {
+                            showStatus(error.message, true);
+                        }
+                    });
+
+                    remove.type = "button";
+                    remove.className = "danger";
+                    remove.textContent = "Remove panel code";
+                    remove.addEventListener("click", async () => {
+                        if (
+                            !confirm(
+                                `Remove ${item.part_code} and reject all ${item.quantity} panels?`,
+                            )
+                        )
+                            return;
+                        try {
+                            if (synced) await submitRejection(item, item.quantity, remove);
+                            else await removeLocal(item, remove);
+                        } catch (error) {
+                            showStatus(error.message, true);
+                        }
+                    });
+
+                    actions.append(field, reduce, remove);
+                    row.append(code, meta, quantity, actions);
+                    records.appendChild(row);
+                }
+            }
+
+            async function load(selectedDate = dateInput.value) {
+                const query = selectedDate
+                    ? `?date=${encodeURIComponent(selectedDate)}`
+                    : "";
+                const [queue, ledger] = await Promise.all([
+                    requestJson(`/api/print-queue${query}`),
+                    requestJson(`/api/production-events${query}`),
+                ]);
+                panels = queue.items;
+                dateInput.value = queue.date;
+                dateInput.max = queue.today;
+                document.querySelector("#panel-quantity").textContent =
+                    panels.reduce(
+                        (sum, item) => sum + Number(item.quantity || 0),
+                        0,
+                    );
+                document.querySelector("#panel-codes").textContent =
+                    new Set(panels.map((item) => item.part_code)).size;
+                document.querySelector("#work-date").textContent = queue.date;
+
+                if (!ledger.enabled) {
+                    qcNotice.className = "notice warning";
+                    qcNotice.textContent =
+                        "Planner sync is off. QC edits adjust the local queue only.";
+                } else if (!ledger.configured) {
+                    qcNotice.className = "notice danger";
+                    qcNotice.textContent =
+                        "Planner sync needs its URL and token; synced panels cannot be corrected until then. Local queue edits still work.";
+                } else {
+                    qcNotice.className = "notice";
+                    qcNotice.textContent =
+                        "QC is connected. Synced panels update Planner; Local panels edit the queue.";
+                }
+                render();
+            }
+
+            searchInput.addEventListener("input", render);
+            dateInput.addEventListener("change", () => {
+                history.replaceState(
+                    null,
+                    "",
+                    `?date=${encodeURIComponent(dateInput.value)}`,
+                );
+                load(dateInput.value).catch((error) => showStatus(error.message, true));
+            });
+
+            const requestedDate = new URLSearchParams(location.search).get("date") || "";
+            load(requestedDate).catch((error) => showStatus(error.message, true));
+        </script>
+    </body>
+</html>

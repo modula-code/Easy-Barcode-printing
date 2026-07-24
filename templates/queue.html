@@ -3,309 +3,107 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Barcode Queue</title>
-        <style>
-            :root {
-                color-scheme: light;
-                --ink: #4f372f;
-                --muted: #6b4b41;
-                --line: #d8c8c1;
-                --surface: #fffdfb;
-                --page: #f1e6dd;
-                --soft: #f3e9e4;
-                --error: #8c2626;
-            }
-
-            * { box-sizing: border-box; }
-
-            body {
-                margin: 0;
-                min-height: 100vh;
-                background: var(--page);
-                color: var(--ink);
-                font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-            }
-
-            main {
-                width: min(1050px, calc(100% - 24px));
-                margin: 24px auto;
-            }
-
-            .panel {
-                padding: clamp(18px, 4vw, 28px);
-                border: 1px solid var(--line);
-                border-radius: 10px;
-                background: var(--surface);
-                box-shadow: 0 8px 24px rgba(79, 55, 47, 0.1);
-            }
-
-            header,
-            .toolbar,
-            .actions {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }
-
-            header {
-                justify-content: space-between;
-                margin-bottom: 18px;
-            }
-
-            h1 {
-                margin: 0;
-                font-size: clamp(1.5rem, 4vw, 2rem);
-            }
-
-            .date-box {
-                display: grid;
-                grid-template-columns: minmax(180px, 260px) 1fr;
-                align-items: end;
-                gap: 12px;
-                margin-bottom: 16px;
-                padding: 14px;
-                border: 1px solid var(--line);
-                border-radius: 8px;
-                background: var(--soft);
-            }
-
-            label {
-                display: grid;
-                gap: 6px;
-                color: var(--muted);
-                font-size: 0.82rem;
-                font-weight: 700;
-            }
-
-            input,
-            button,
-            .export {
-                min-height: 46px;
-                border-radius: 8px;
-                font: inherit;
-            }
-
-            input {
-                width: 100%;
-                padding: 10px 12px;
-                border: 1px solid var(--line);
-                background: #fff;
-                color: var(--ink);
-                font-size: 1rem;
-            }
-
-            input[type="text"] { text-transform: uppercase; }
-
-            input:focus {
-                outline: 3px solid rgba(107, 75, 65, 0.18);
-                border-color: var(--ink);
-            }
-
-            input:disabled {
-                background: var(--soft);
-                opacity: 1;
-            }
-
-            button,
-            .export {
-                padding: 0 18px;
-                border: 0;
-                background: var(--ink);
-                color: #fff;
-                font-weight: 750;
-                cursor: pointer;
-            }
-
-            .export {
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                text-decoration: none;
-                white-space: nowrap;
-            }
-
-            button:hover,
-            .export:hover { background: var(--muted); }
-            button:disabled { cursor: wait; opacity: 0.6; }
-
-            button.remove {
-                border: 1px solid #dba6a6;
-                background: #fff1f1;
-                color: var(--error);
-            }
-
-            #status {
-                min-height: 1.4em;
-                margin: 0 0 10px;
-                color: var(--muted);
-            }
-
-            #status.error { color: var(--error); }
-            #list,
-            #events { display: grid; gap: 10px; }
-
-            h2 {
-                margin: 26px 0 6px;
-                font-size: 1.05rem;
-            }
-
-            .section-note {
-                margin: 0 0 10px;
-                color: var(--muted);
-                font-size: 0.85rem;
-            }
-
-            .event {
-                display: grid;
-                grid-template-columns: 1fr auto;
-                gap: 4px 12px;
-                padding: 12px 14px;
-                border: 1px solid var(--line);
-                border-left-width: 5px;
-                border-radius: 8px;
-                background: var(--surface);
-            }
-
-            .event.synced { border-left-color: #3f8f5f; }
-            .event.pending { border-left-color: #c79a3a; }
-            .event.failed { border-left-color: var(--error); }
-
-            .event-head {
-                font-weight: 750;
-                display: flex;
-                flex-wrap: wrap;
-                align-items: center;
-                gap: 8px;
-            }
-
-            .pill {
-                padding: 2px 9px;
-                border-radius: 999px;
-                font-size: 0.72rem;
-                font-weight: 750;
-                text-transform: uppercase;
-                letter-spacing: 0.04em;
-            }
-
-            .synced .pill { background: #e6f3ea; color: #2f6b48; }
-            .pending .pill { background: #fbf1da; color: #8a6414; }
-            .failed .pill { background: #fff1f1; color: var(--error); }
-
-            .event-detail {
-                grid-column: 1 / -1;
-                margin: 0;
-                color: var(--muted);
-                font-size: 0.85rem;
-            }
-
-            .event-detail.error-text { color: var(--error); }
-
-            .event button {
-                grid-column: 1;
-                justify-self: start;
-                height: 38px;
-                margin-top: 6px;
-            }
-
-            .reject-box {
-                display: grid;
-                grid-template-columns: 84px auto;
-                align-items: end;
-                gap: 8px;
-            }
-
-            .row {
-                display: grid;
-                grid-template-columns: minmax(150px, 0.8fr) minmax(180px, 1fr) 100px auto;
-                align-items: end;
-                gap: 10px;
-                padding: 14px;
-                border: 1px solid var(--line);
-                border-radius: 8px;
-                background: var(--surface);
-            }
-
-            .empty {
-                margin: 0;
-                padding: 28px 14px;
-                border: 1px dashed var(--line);
-                border-radius: 8px;
-                background: var(--soft);
-                color: var(--muted);
-                text-align: center;
-            }
-
-            [hidden] { display: none !important; }
-
-            @media (max-width: 760px) {
-                header,
-                .date-box,
-                .row {
-                    display: grid;
-                    grid-template-columns: 1fr;
-                }
-
-                .toolbar { display: grid; grid-template-columns: 1fr 1fr; }
-                .toolbar > *,
-                .actions button { width: 100%; }
-                .actions { display: grid; grid-template-columns: 1fr 1fr; }
-            }
-        </style>
+        <title>Production Queue</title>
+        <link
+            rel="stylesheet"
+            href="{{ url_for('static', filename='workflow.css') }}"
+        />
     </head>
     <body>
-        <main>
-            <section class="panel">
-                <header>
-                    <h1>Barcode Queue</h1>
-                    <div class="toolbar">
-                        <a class="export" href="/">Back to Label Printing</a>
-                        <a class="export" href="/history">History</a>
-                        <a id="export-link" class="export" href="#">Export XLSX</a>
-                        <button id="clear-button" class="remove" type="button">
-                            Clear today's queue
-                        </button>
-                    </div>
-                </header>
+        <header class="app-header">
+            <div class="header-inner">
+                <a class="brand" href="/">
+                    <img
+                        src="{{ url_for('static', filename='logo.svg') }}"
+                        alt="Modula SW Enterprise"
+                    />
+                    <span class="brand-label">Barcode control</span>
+                </a>
+                <nav class="nav" aria-label="Barcode workflow">
+                    <a href="/">Label printing</a>
+                    <a href="/queue" aria-current="page">Queue</a>
+                    <a href="/qc">QC</a>
+                    <a href="/history">History</a>
+                </nav>
+            </div>
+        </header>
 
-                <div class="date-box">
-                    <label>
-                        Queue date
-                        <input id="queue-date" type="date" />
-                    </label>
-                    <span id="date-note">Today’s shared queue</span>
+        <main class="workspace">
+            <section class="hero">
+                <div>
+                    <p class="eyebrow">Today’s production</p>
+                    <h1>Production queue</h1>
+                    <p class="lede">
+                        A live view of panel codes recorded today. Correct
+                        accepted quantities from QC; use History for earlier dates.
+                    </p>
                 </div>
+                <div class="hero-actions">
+                    <a
+                        id="export-link"
+                        class="button secondary"
+                        href="/api/print-queue/export.xlsx"
+                        >Export XLSX</a
+                    >
+                    <button id="clear-button" class="danger" type="button" hidden>
+                        Clear local rows
+                    </button>
+                </div>
+            </section>
 
-                <p id="status" aria-live="polite"></p>
-                <div id="list" aria-live="polite"></div>
+            <section class="metrics" aria-label="Queue summary">
+                <div class="metric">
+                    <span class="metric-label">Panel quantity</span>
+                    <strong id="total-quantity" class="metric-value">—</strong>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Panel codes</span>
+                    <strong id="code-count" class="metric-value">—</strong>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Planner sync</span>
+                    <strong id="sync-count" class="metric-value">—</strong>
+                </div>
+            </section>
 
-                <h2>Planner sync</h2>
-                <p class="section-note">
-                    Every scan and rejection sent to Planner. “Synced” means
-                    Planner booked it and told us the plan, SO and production
-                    day. Anything else never reached the plan — retry it.
-                </p>
-                <div id="events" aria-live="polite"></div>
+            <p id="status" class="status" aria-live="polite"></p>
+
+            <section class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h2>Today’s panel records</h2>
+                        <p id="date-label">Loading current work date…</p>
+                    </div>
+                    <a class="button secondary" href="/qc">Open QC</a>
+                </div>
+                <div id="records" class="records" aria-live="polite"></div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h2>Sync attention</h2>
+                        <p>Only records that still need Planner are shown here.</p>
+                    </div>
+                    <a class="button secondary" href="/history">Full audit</a>
+                </div>
+                <div class="panel-body">
+                    <p id="sync-notice" class="notice">Checking Planner sync…</p>
+                    <div id="sync-events" class="timeline"></div>
+                </div>
             </section>
         </main>
 
         <script>
-            const list = document.querySelector("#list");
-            const events = document.querySelector("#events");
+            const records = document.querySelector("#records");
+            const syncEvents = document.querySelector("#sync-events");
+            const syncNotice = document.querySelector("#sync-notice");
             const statusText = document.querySelector("#status");
-            const dateInput = document.querySelector("#queue-date");
-            const dateNote = document.querySelector("#date-note");
-            const exportLink = document.querySelector("#export-link");
             const clearButton = document.querySelector("#clear-button");
-            let queueData = null;
 
-            function showStatus(message, error = false) {
+            function showStatus(message, isError = false) {
                 statusText.textContent = message;
-                statusText.className = error ? "error" : "";
-            }
-
-            function newEventId() {
-                if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-                return `event-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+                statusText.className = `status${isError ? " error" : ""}`;
             }
 
             async function requestJson(url, options) {
@@ -315,241 +113,166 @@
                 return data;
             }
 
-            function field(labelText, type, value, disabled) {
-                const label = document.createElement("label");
-                const caption = document.createElement("span");
-                const input = document.createElement("input");
-                caption.textContent = labelText;
-                input.type = type;
-                input.value = value || "";
-                input.disabled = disabled;
-                if (type === "number") {
-                    input.min = "1";
-                    input.max = "500";
-                    input.step = "1";
-                }
-                label.append(caption, input);
-                return { label, input };
+            function emptyState(title, text) {
+                const empty = document.createElement("p");
+                const strong = document.createElement("strong");
+                empty.className = "empty";
+                strong.textContent = title;
+                empty.append(strong, document.createTextNode(text));
+                return empty;
             }
 
-            function render(data) {
-                queueData = data;
-                list.replaceChildren();
-                const archived = data.date !== data.today;
-                dateInput.value = data.date;
-                dateInput.max = data.today;
-                dateNote.textContent = archived
-                    ? "Archived queue — view and export only"
-                    : "Today’s shared queue";
-                clearButton.hidden = true;
-                exportLink.href = `/api/print-queue/export.xlsx?date=${encodeURIComponent(data.date)}`;
+            function statusPill(item) {
+                const pill = document.createElement("span");
+                const labels = {
+                    synced: ["Planner synced", "success"],
+                    pushed: ["Recorded", "success"],
+                    error: ["Needs attention", "danger"],
+                    queued: ["Local", "warning"],
+                };
+                const [label, tone] = labels[item.status] || ["Recorded", ""];
+                pill.className = `pill ${tone}`;
+                pill.textContent = label;
+                return pill;
+            }
+
+            function renderRecords(data) {
+                records.replaceChildren();
+                document.querySelector("#date-label").textContent =
+                    `Work date ${data.date}`;
+                document.querySelector("#total-quantity").textContent =
+                    data.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+                document.querySelector("#code-count").textContent =
+                    new Set(data.items.map((item) => item.part_code)).size;
+                clearButton.hidden = !data.items.some(
+                    (item) => item.status === "queued" || item.status === "error",
+                );
 
                 if (!data.items.length) {
-                    const empty = document.createElement("p");
-                    empty.className = "empty";
-                    empty.textContent = archived
-                        ? "No archived barcodes for this date."
-                        : "No barcodes scanned today.";
-                    list.appendChild(empty);
-                    return;
-                }
-
-                for (const item of data.items) {
-                    const row = document.createElement("div");
-                    row.className = "row";
-                    const po = field("PO number", "text", item.po_number, true);
-                    const barcode = field("Barcode", "text", item.part_code, true);
-                    const quantity = field("Good quantity", "number", item.quantity, true);
-                    row.append(po.label, barcode.label, quantity.label);
-
-                    if (!archived && item.status === "synced") {
-                        // QC rejection: the quantity is typed in the row and the
-                        // button asks for confirmation in place, so nothing
-                        // blocks the scanner on a shop-floor tablet.
-                        const box = document.createElement("div");
-                        const qtyField = field("QC reject qty", "number", "", false);
-                        const reject = document.createElement("button");
-                        box.className = "reject-box";
-                        qtyField.input.max = String(item.quantity);
-                        qtyField.input.placeholder = "0";
-                        reject.type = "button";
-                        reject.textContent = "Reject";
-                        reject.className = "remove";
-                        const rejectEventKey = `rejection-event:${item.id}`;
-                        const rejectQuantityKey = `rejection-quantity:${item.id}`;
-                        let rejectEventId = sessionStorage.getItem(rejectEventKey) || newEventId();
-                        let pendingRejectQuantity = Number(sessionStorage.getItem(rejectQuantityKey)) || null;
-                        let armed = false;
-                        if (pendingRejectQuantity) qtyField.input.value = String(pendingRejectQuantity);
-
-                        const disarm = () => {
-                            armed = false;
-                            reject.textContent = "Reject";
-                        };
-                        qtyField.input.addEventListener("input", disarm);
-
-                        reject.addEventListener("click", async () => {
-                            const qty = Number(qtyField.input.value);
-                            if (!Number.isInteger(qty) || qty < 1 || qty > item.quantity) {
-                                showStatus(`Enter a rejected quantity from 1 to ${item.quantity}.`, true);
-                                return;
-                            }
-                            if (pendingRejectQuantity !== null && qty !== pendingRejectQuantity) {
-                                showStatus(`Retry the pending rejection with quantity ${pendingRejectQuantity}.`, true);
-                                return;
-                            }
-                            if (!armed) {
-                                armed = true;
-                                reject.textContent = `Confirm −${qty}`;
-                                showStatus(
-                                    `${item.part_code} drops to ${item.quantity - qty}. ` +
-                                        "Its frame and EB are removed in Planner too. Press again to confirm.",
-                                );
-                                return;
-                            }
-                            pendingRejectQuantity = qty;
-                            reject.disabled = true;
-                            try {
-                                sessionStorage.setItem(rejectEventKey, rejectEventId);
-                                sessionStorage.setItem(rejectQuantityKey, String(qty));
-                                const result = await requestJson(`/api/print-queue/${item.id}/reject`, {
-                                    method: "POST",
-                                    headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({ event_id: rejectEventId, quantity: qty }),
-                                });
-                                sessionStorage.removeItem(rejectEventKey);
-                                sessionStorage.removeItem(rejectQuantityKey);
-                                rejectEventId = newEventId();
-                                pendingRejectQuantity = null;
-                                const associated = (result.sync?.associated || [])
-                                    .map((part) => `${part.code} x ${part.quantity}`)
-                                    .join(", ");
-                                showStatus(`Rejected ${item.part_code} x ${qty}${associated ? `; removed ${associated}` : ""}.`);
-                                await load(data.date);
-                            } catch (error) {
-                                showStatus(error.message, true);
-                            } finally {
-                                reject.disabled = false;
-                                disarm();
-                            }
-                        });
-                        box.append(qtyField.label, reject);
-                        row.appendChild(box);
-                    }
-                    list.appendChild(row);
-                }
-            }
-
-            function detail(parent, text, isError = false) {
-                if (!text) return;
-                const p = document.createElement("p");
-                p.className = isError ? "event-detail error-text" : "event-detail";
-                p.textContent = text;
-                parent.appendChild(p);
-            }
-
-            function renderEvents(data) {
-                events.replaceChildren();
-                if (!data.items.length) {
-                    const empty = document.createElement("p");
-                    empty.className = "empty";
-                    empty.textContent = "Nothing sent to Planner on this date.";
-                    events.appendChild(empty);
-                    return;
-                }
-
-                for (const item of data.items) {
-                    const synced = item.status === "synced";
-                    const card = document.createElement("div");
-                    const head = document.createElement("div");
-                    const pill = document.createElement("span");
-                    card.className = `event ${synced ? "synced" : item.error ? "failed" : "pending"}`;
-                    pill.className = "pill";
-                    pill.textContent = synced
-                        ? "Synced"
-                        : item.error
-                          ? "Not sent"
-                          : "Pending";
-                    head.className = "event-head";
-                    head.append(
-                        pill,
-                        document.createTextNode(
-                            `${item.action === "rejected" ? "QC reject" : "Produced"} ` +
-                                `${item.part_code} × ${item.quantity} · ${item.po_number}`,
+                    records.append(
+                        emptyState(
+                            "No panels recorded today.",
+                            " Start from Label printing to add the first panel.",
                         ),
                     );
-                    card.appendChild(head);
+                    return;
+                }
 
-                    if (synced) {
-                        const allocations = (item.allocations || [])
-                            .map((a) => `${a.soNumber} × ${a.quantity}`)
-                            .join(", ");
-                        detail(
-                            card,
-                            [
-                                `Plan ${item.plan_label || item.plan_id}`,
-                                item.production_day ? `day ${item.production_day}` : "",
-                                allocations ? `booked to ${allocations}` : "",
-                                item.panel_total != null ? `plan total ${item.panel_total}` : "",
-                            ]
-                                .filter(Boolean)
-                                .join(" · "),
-                        );
-                        const associated = (item.associated || [])
-                            .map((part) => `${part.code} × ${part.quantity}`)
-                            .join(", ");
-                        detail(
-                            card,
-                            associated
-                                ? `${item.action === "rejected" ? "Also removed" : "Also consumed"}: ${associated}`
-                                : "",
-                        );
-                    } else {
-                        detail(card, item.error || "Waiting for Planner.", true);
-                        const retry = document.createElement("button");
-                        retry.type = "button";
-                        retry.textContent = "Retry sync";
-                        retry.addEventListener("click", async () => {
-                            retry.disabled = true;
-                            try {
-                                await requestJson(
-                                    `/api/production-events/${encodeURIComponent(item.event_id)}/retry`,
-                                    { method: "POST" },
-                                );
-                                showStatus(`Sent ${item.part_code} × ${item.quantity} to Planner.`);
-                                await load(data.date);
-                            } catch (error) {
-                                showStatus(error.message, true);
-                                retry.disabled = false;
-                            }
-                        });
-                        card.appendChild(retry);
-                    }
-                    events.appendChild(card);
+                for (const item of data.items) {
+                    const row = document.createElement("article");
+                    const code = document.createElement("div");
+                    const meta = document.createElement("div");
+                    const quantity = document.createElement("div");
+                    const state = document.createElement("div");
+                    row.className = "record";
+                    code.className = "record-code";
+                    meta.className = "record-meta";
+                    quantity.className = "record-quantity";
+                    code.textContent = item.part_code;
+                    meta.textContent = item.so_number
+                        ? `${item.po_number} · ${item.so_number}`
+                        : item.po_number;
+                    quantity.append(
+                        document.createTextNode(item.quantity),
+                        Object.assign(document.createElement("small"), {
+                            textContent: "panels",
+                        }),
+                    );
+                    state.appendChild(statusPill(item));
+                    row.append(code, meta, quantity, state);
+                    records.appendChild(row);
                 }
             }
 
-            async function load(selectedDate = "") {
-                const query = selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : "";
-                const [queue, ledger] = await Promise.all([
-                    requestJson(`/api/print-queue${query}`),
-                    requestJson(`/api/production-events${query}`),
-                ]);
-                render(queue);
-                renderEvents(ledger);
+            function renderSync(ledger) {
+                syncEvents.replaceChildren();
+                const attention = ledger.items.filter(
+                    (item) => item.status !== "synced",
+                );
+                document.querySelector("#sync-count").textContent = attention.length
+                    ? `${attention.length} issue${attention.length === 1 ? "" : "s"}`
+                    : "Ready";
+
+                if (!ledger.enabled) {
+                    syncNotice.className = "notice warning";
+                    syncNotice.textContent =
+                        "Planner sync is off. Local panel records remain in this barcode app.";
+                } else if (!ledger.configured) {
+                    syncNotice.className = "notice danger";
+                    syncNotice.textContent =
+                        "Planner sync is on, but the Planner URL or sync token is missing.";
+                } else if (attention.length) {
+                    syncNotice.className = "notice danger";
+                    syncNotice.textContent =
+                        `${attention.length} event${attention.length === 1 ? "" : "s"} need attention.`;
+                } else {
+                    syncNotice.className = "notice";
+                    syncNotice.textContent = "Planner sync is ready. No action is needed.";
+                }
+
+                if (!attention.length) return;
+
+                for (const item of attention) {
+                    const event = document.createElement("article");
+                    const marker = document.createElement("span");
+                    const body = document.createElement("div");
+                    const title = document.createElement("p");
+                    const detail = document.createElement("p");
+                    const retry = document.createElement("button");
+                    event.className = `event ${item.error ? "failed" : "pending"}`;
+                    marker.className = "event-marker";
+                    title.className = "event-title";
+                    detail.className = `event-detail${item.error ? " error" : ""}`;
+                    title.textContent =
+                        `${item.action === "rejected" ? "QC rejection" : "Production"} · ` +
+                        `${item.part_code} × ${item.quantity}`;
+                    detail.textContent =
+                        item.error || `Waiting to send ${item.po_number} to Planner.`;
+                    retry.type = "button";
+                    retry.className = "secondary";
+                    retry.textContent = "Retry";
+                    retry.addEventListener("click", async () => {
+                        retry.disabled = true;
+                        try {
+                            await requestJson(
+                                `/api/production-events/${encodeURIComponent(item.event_id)}/retry`,
+                                { method: "POST" },
+                            );
+                            showStatus(`${item.part_code} was sent to Planner.`);
+                            await load();
+                        } catch (error) {
+                            showStatus(error.message, true);
+                            retry.disabled = false;
+                        }
+                    });
+                    body.append(title, detail);
+                    event.append(marker, body, retry);
+                    syncEvents.appendChild(event);
+                }
             }
 
-            dateInput.addEventListener("change", () => {
-                history.replaceState(null, "", `?date=${encodeURIComponent(dateInput.value)}`);
-                load(dateInput.value).catch((error) => showStatus(error.message, true));
-            });
+            async function load() {
+                const [queue, ledger] = await Promise.all([
+                    requestJson("/api/print-queue"),
+                    requestJson("/api/production-events"),
+                ]);
+                renderRecords(queue);
+                renderSync(ledger);
+            }
 
             clearButton.addEventListener("click", async () => {
-                if (!confirm("Clear every barcode in today's queue? This cannot be undone.")) return;
+                if (
+                    !confirm(
+                        "Clear today’s unsynced local rows? Planner-synced panels will stay.",
+                    )
+                )
+                    return;
                 clearButton.disabled = true;
                 try {
-                    const data = await requestJson("/api/print-queue", { method: "DELETE" });
-                    showStatus(`Cleared ${data.cleared} queue rows.`);
+                    const data = await requestJson("/api/print-queue", {
+                        method: "DELETE",
+                    });
+                    showStatus(`Cleared ${data.cleared} local row${data.cleared === 1 ? "" : "s"}.`);
                     await load();
                 } catch (error) {
                     showStatus(error.message, true);
@@ -558,8 +281,7 @@
                 }
             });
 
-            const initialDate = new URLSearchParams(location.search).get("date") || "";
-            load(initialDate).catch((error) => showStatus(error.message, true));
+            load().catch((error) => showStatus(error.message, true));
         </script>
     </body>
 </html>

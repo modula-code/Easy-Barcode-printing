@@ -70,7 +70,9 @@ def history_page():
     return render_template("history.html")
 
 
-
+@app.get("/qc")
+def qc_page():
+    return render_template("qc.html")
 
 
 @app.get("/healthz")
@@ -453,9 +455,15 @@ def reject_print_queue_item(item_id):
 @app.get("/api/production-events")
 def production_events():
     try:
-        return jsonify(list_production_events(request.args.get("date")))
+        ledger = list_production_events(request.args.get("date"))
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
+    ledger["enabled"] = _planner_sync_enabled()
+    ledger["configured"] = bool(
+        os.getenv("PLANNER_API_URL", "").strip()
+        and os.getenv("BARCODE_SYNC_TOKEN", "").strip()
+    )
+    return jsonify(ledger)
 
 
 @app.post("/api/production-events/<event_id>/retry")

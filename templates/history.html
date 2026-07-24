@@ -3,186 +3,369 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Queue History</title>
-        <style>
-            :root {
-                color-scheme: light;
-                --ink: #4f372f;
-                --muted: #6b4b41;
-                --line: #d8c8c1;
-                --surface: #fffdfb;
-                --page: #f1e6dd;
-                --soft: #f3e9e4;
-            }
-
-            * { box-sizing: border-box; }
-
-            body {
-                margin: 0;
-                min-height: 100vh;
-                background: var(--page);
-                color: var(--ink);
-                font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-            }
-
-            main {
-                width: min(800px, calc(100% - 24px));
-                margin: 24px auto;
-            }
-
-            .panel {
-                padding: clamp(18px, 4vw, 28px);
-                border: 1px solid var(--line);
-                border-radius: 10px;
-                background: var(--surface);
-                box-shadow: 0 8px 24px rgba(79, 55, 47, 0.1);
-            }
-
-            header,
-            .toolbar {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }
-
-            header {
-                justify-content: space-between;
-                margin-bottom: 18px;
-            }
-
-            h1 {
-                margin: 0;
-                font-size: clamp(1.5rem, 4vw, 2rem);
-            }
-
-            .export {
-                padding: 0 18px;
-                min-height: 46px;
-                border: 0;
-                border-radius: 8px;
-                background: var(--ink);
-                color: #fff;
-                font-weight: 750;
-                cursor: pointer;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                text-decoration: none;
-                white-space: nowrap;
-                font: inherit;
-            }
-
-            .export:hover { background: var(--muted); }
-
-            .date-list {
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-                margin-top: 16px;
-            }
-
-            .date-link {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                padding: 16px;
-                border: 1px solid var(--line);
-                border-radius: 8px;
-                background: var(--soft);
-                color: var(--ink);
-                text-decoration: none;
-                font-weight: 600;
-                transition: background 0.2s;
-            }
-
-            .date-link:hover {
-                background: var(--line);
-            }
-
-            #status {
-                margin: 0;
-                color: var(--muted);
-            }
-
-            .empty {
-                margin: 16px 0 0;
-                padding: 28px 14px;
-                border: 1px dashed var(--line);
-                border-radius: 8px;
-                background: var(--soft);
-                color: var(--muted);
-                text-align: center;
-            }
-
-            @media (max-width: 760px) {
-                header {
-                    flex-direction: column;
-                    align-items: stretch;
-                }
-                .toolbar { flex-direction: column; }
-                .toolbar > * { width: 100%; }
-            }
-        </style>
+        <title>Production History</title>
+        <link
+            rel="stylesheet"
+            href="{{ url_for('static', filename='workflow.css') }}"
+        />
     </head>
     <body>
-        <main>
-            <section class="panel">
-                <header>
-                    <h1>Queue History</h1>
-                    <div class="toolbar">
-                        <a class="export" href="/">Back to Label Printing</a>
-                        <a class="export" href="/queue">Today's Queue</a>
-                    </div>
-                </header>
-                <p id="status" aria-live="polite">Loading history...</p>
-                <div id="date-list" class="date-list"></div>
+        <header class="app-header">
+            <div class="header-inner">
+                <a class="brand" href="/">
+                    <img
+                        src="{{ url_for('static', filename='logo.svg') }}"
+                        alt="Modula SW Enterprise"
+                    />
+                    <span class="brand-label">Barcode control</span>
+                </a>
+                <nav class="nav" aria-label="Barcode workflow">
+                    <a href="/">Label printing</a>
+                    <a href="/queue">Queue</a>
+                    <a href="/qc">QC</a>
+                    <a href="/history" aria-current="page">History</a>
+                </nav>
+            </div>
+        </header>
+
+        <main class="workspace">
+            <section class="hero">
+                <div>
+                    <p class="eyebrow">Production audit</p>
+                    <h1>History</h1>
+                    <p class="lede">
+                        Review what was produced, what QC reversed, and the panel
+                        balance left for any work date.
+                    </p>
+                </div>
+                <div class="hero-actions">
+                    <a id="export-link" class="button secondary" href="#"
+                        >Export selected date</a
+                    >
+                </div>
             </section>
+
+            <p id="status" class="status" aria-live="polite"></p>
+
+            <div class="history-layout">
+                <aside class="date-panel" aria-label="History dates">
+                    <label class="field">
+                        <span>Work date</span>
+                        <input id="history-date" type="date" />
+                    </label>
+                    <div id="date-list" class="date-list"></div>
+                </aside>
+
+                <div>
+                    <section class="metrics" aria-label="Daily history summary">
+                        <div class="metric">
+                            <span class="metric-label">Produced</span>
+                            <strong id="produced-total" class="metric-value">—</strong>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">QC rejected</span>
+                            <strong id="rejected-total" class="metric-value">—</strong>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Panel balance</span>
+                            <strong id="balance-total" class="metric-value">—</strong>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <h2 id="activity-title">Activity</h2>
+                                <p>Immutable production and QC sync events.</p>
+                            </div>
+                        </div>
+                        <div id="timeline" class="timeline" aria-live="polite"></div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <h2>Panel balance</h2>
+                                <p>Panel quantities remaining after QC corrections.</p>
+                            </div>
+                        </div>
+                        <div id="balance-records" class="records"></div>
+                    </section>
+                </div>
+            </div>
         </main>
+
         <script>
-            async function loadHistory() {
-                const list = document.getElementById("date-list");
-                const status = document.getElementById("status");
-                
-                try {
-                    const response = await fetch("/api/history");
-                    const data = await response.json();
-                    
-                    if (!response.ok) throw new Error(data.error || "Failed to load history.");
-                    
-                    status.textContent = "";
-                    list.innerHTML = "";
-                    
-                    if (!data.dates || data.dates.length === 0) {
-                        const empty = document.createElement("div");
-                        empty.className = "empty";
-                        empty.textContent = "No history available.";
-                        list.appendChild(empty);
-                        return;
-                    }
-                    
-                    for (const date of data.dates) {
-                        const link = document.createElement("a");
-                        link.className = "date-link";
-                        link.href = `/queue?date=${encodeURIComponent(date)}`;
-                        
-                        const dateText = document.createElement("span");
-                        dateText.textContent = date;
-                        
-                        const viewText = document.createElement("span");
-                        viewText.textContent = "View Queue →";
-                        
-                        link.appendChild(dateText);
-                        link.appendChild(viewText);
-                        
-                        list.appendChild(link);
-                    }
-                } catch (error) {
-                    status.textContent = error.message;
-                    status.style.color = "var(--error)";
+            const dateInput = document.querySelector("#history-date");
+            const dateList = document.querySelector("#date-list");
+            const timeline = document.querySelector("#timeline");
+            const balanceRecords = document.querySelector("#balance-records");
+            const statusText = document.querySelector("#status");
+            let availableDates = [];
+
+            function showStatus(message, isError = false) {
+                statusText.textContent = message;
+                statusText.className = `status${isError ? " error" : ""}`;
+            }
+
+            async function requestJson(url, options) {
+                const response = await fetch(url, options);
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || "Request failed.");
+                return data;
+            }
+
+            function emptyState(title, text) {
+                const empty = document.createElement("p");
+                const strong = document.createElement("strong");
+                empty.className = "empty";
+                strong.textContent = title;
+                empty.append(strong, document.createTextNode(text));
+                return empty;
+            }
+
+            function formatDate(value) {
+                const date = new Date(`${value}T00:00:00`);
+                return Number.isNaN(date.getTime())
+                    ? value
+                    : new Intl.DateTimeFormat("en-IN", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                      }).format(date);
+            }
+
+            function formatTime(value) {
+                const date = new Date(value);
+                return Number.isNaN(date.getTime())
+                    ? ""
+                    : new Intl.DateTimeFormat("en-IN", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                      }).format(date);
+            }
+
+            function renderDates(selectedDate) {
+                dateList.replaceChildren();
+                for (const date of availableDates) {
+                    const button = document.createElement("button");
+                    button.type = "button";
+                    button.className = date === selectedDate ? "active" : "";
+                    button.textContent = formatDate(date);
+                    button.addEventListener("click", () => selectDate(date));
+                    dateList.appendChild(button);
+                }
+                if (!availableDates.length) {
+                    dateList.append(
+                        emptyState("No saved dates.", " Production history will appear here."),
+                    );
                 }
             }
-            
-            loadHistory();
+
+            function statusPill(item) {
+                const pill = document.createElement("span");
+                const synced = item.status === "synced";
+                pill.className = `pill ${synced ? "success" : item.error ? "danger" : "warning"}`;
+                pill.textContent = synced ? "Synced" : item.error ? "Not sent" : "Pending";
+                return pill;
+            }
+
+            function renderTimeline(ledger) {
+                timeline.replaceChildren();
+                if (!ledger.items.length) {
+                    timeline.append(
+                        emptyState(
+                            "No detailed event audit for this date.",
+                            " Older records created before Planner sync still appear in the balance below.",
+                        ),
+                    );
+                    return;
+                }
+
+                for (const item of ledger.items) {
+                    const event = document.createElement("article");
+                    const marker = document.createElement("span");
+                    const body = document.createElement("div");
+                    const title = document.createElement("p");
+                    const primaryDetail = document.createElement("p");
+                    const secondaryDetail = document.createElement("p");
+                    const side = document.createElement("div");
+                    const time = document.createElement("span");
+                    const retry = document.createElement("button");
+                    const synced = item.status === "synced";
+                    const allocations = (item.allocations || [])
+                        .map((part) => `${part.soNumber} × ${part.quantity}`)
+                        .join(", ");
+                    const associated = (item.associated || [])
+                        .map((part) => `${part.code} × ${part.quantity}`)
+                        .join(", ");
+
+                    event.className = `event ${synced ? "" : item.error ? "failed" : "pending"}`;
+                    marker.className = "event-marker";
+                    title.className = "event-title";
+                    primaryDetail.className = "event-detail";
+                    secondaryDetail.className = `event-detail${item.error ? " error" : ""}`;
+                    side.className = "event-side";
+                    time.className = "event-time";
+                    retry.type = "button";
+                    retry.className = "secondary";
+                    retry.textContent = "Retry sync";
+                    title.textContent =
+                        `${item.action === "rejected" ? "QC rejected" : "Produced"} ` +
+                        `${item.part_code} × ${item.quantity}`;
+                    primaryDetail.textContent = [
+                        item.po_number,
+                        item.so_number,
+                        item.plan_label || item.plan_id,
+                        item.production_day ? `day ${item.production_day}` : "",
+                    ]
+                        .filter(Boolean)
+                        .join(" · ");
+                    secondaryDetail.textContent = item.error
+                        ? item.error
+                        : [
+                              allocations ? `SO allocation: ${allocations}` : "",
+                              associated
+                                  ? `${item.action === "rejected" ? "Reversed" : "Associated"}: ${associated}`
+                                  : "",
+                          ]
+                              .filter(Boolean)
+                              .join(" · ");
+                    time.textContent = formatTime(item.created_at);
+                    body.append(title, primaryDetail);
+                    if (secondaryDetail.textContent) body.appendChild(secondaryDetail);
+                    side.append(statusPill(item), time);
+                    if (!synced) {
+                        retry.addEventListener("click", async () => {
+                            retry.disabled = true;
+                            try {
+                                await requestJson(
+                                    `/api/production-events/${encodeURIComponent(item.event_id)}/retry`,
+                                    { method: "POST" },
+                                );
+                                showStatus(`${item.part_code} was sent to Planner.`);
+                                await loadDate(dateInput.value);
+                            } catch (error) {
+                                showStatus(error.message, true);
+                                retry.disabled = false;
+                            }
+                        });
+                        side.appendChild(retry);
+                    }
+                    event.append(marker, body, side);
+                    timeline.appendChild(event);
+                }
+            }
+
+            function balancePill(item) {
+                const pill = document.createElement("span");
+                const labels = {
+                    synced: ["Planner synced", "success"],
+                    pushed: ["Recorded", "success"],
+                    error: ["Needs attention", "danger"],
+                    queued: ["Local", "warning"],
+                };
+                const [label, tone] = labels[item.status] || ["Recorded", ""];
+                pill.className = `pill ${tone}`;
+                pill.textContent = label;
+                return pill;
+            }
+
+            function renderBalance(queue) {
+                balanceRecords.replaceChildren();
+                if (!queue.items.length) {
+                    balanceRecords.append(
+                        emptyState(
+                            "No panel balance.",
+                            " No panel quantity remains for this date.",
+                        ),
+                    );
+                    return;
+                }
+
+                for (const item of queue.items) {
+                    const row = document.createElement("article");
+                    const code = document.createElement("div");
+                    const meta = document.createElement("div");
+                    const quantity = document.createElement("div");
+                    const state = document.createElement("div");
+                    row.className = "record";
+                    code.className = "record-code";
+                    meta.className = "record-meta";
+                    quantity.className = "record-quantity";
+                    code.textContent = item.part_code;
+                    meta.textContent = [item.po_number, item.so_number]
+                        .filter(Boolean)
+                        .join(" · ");
+                    quantity.append(
+                        document.createTextNode(item.quantity),
+                        Object.assign(document.createElement("small"), {
+                            textContent: "panels",
+                        }),
+                    );
+                    state.appendChild(balancePill(item));
+                    row.append(code, meta, quantity, state);
+                    balanceRecords.appendChild(row);
+                }
+            }
+
+            async function loadDate(selectedDate = "") {
+                const query = selectedDate
+                    ? `?date=${encodeURIComponent(selectedDate)}`
+                    : "";
+                const [queue, ledger] = await Promise.all([
+                    requestJson(`/api/print-queue${query}`),
+                    requestJson(`/api/production-events${query}`),
+                ]);
+                const date = queue.date;
+                dateInput.value = date;
+                dateInput.max = queue.today;
+                document.querySelector("#activity-title").textContent =
+                    `Activity · ${formatDate(date)}`;
+                document.querySelector("#export-link").href =
+                    `/api/print-queue/export.xlsx?date=${encodeURIComponent(date)}`;
+
+                const synced = ledger.items.filter((item) => item.status === "synced");
+                document.querySelector("#produced-total").textContent = synced
+                    .filter((item) => item.action === "produced")
+                    .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+                document.querySelector("#rejected-total").textContent = synced
+                    .filter((item) => item.action === "rejected")
+                    .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+                document.querySelector("#balance-total").textContent =
+                    queue.items.reduce(
+                        (sum, item) => sum + Number(item.quantity || 0),
+                        0,
+                    );
+
+                renderDates(date);
+                renderTimeline(ledger);
+                renderBalance(queue);
+                showStatus("");
+            }
+
+            function selectDate(date) {
+                history.replaceState(
+                    null,
+                    "",
+                    `?date=${encodeURIComponent(date)}`,
+                );
+                loadDate(date).catch((error) => showStatus(error.message, true));
+            }
+
+            dateInput.addEventListener("change", () => selectDate(dateInput.value));
+
+            async function start() {
+                const historyData = await requestJson("/api/history");
+                availableDates = historyData.dates || [];
+                const requested =
+                    new URLSearchParams(location.search).get("date") ||
+                    availableDates[0] ||
+                    "";
+                await loadDate(requested);
+            }
+
+            start().catch((error) => showStatus(error.message, true));
         </script>
     </body>
 </html>
