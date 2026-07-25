@@ -187,7 +187,7 @@
             function renderSync(ledger) {
                 syncEvents.replaceChildren();
                 const attention = ledger.items.filter(
-                    (item) => item.status !== "synced",
+                    (item) => !["synced", "skipped"].includes(item.status),
                 );
                 document.querySelector("#sync-count").textContent = attention.length
                     ? `${attention.length} issue${attention.length === 1 ? "" : "s"}`

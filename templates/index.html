@@ -861,9 +861,15 @@
                         const associated = (data.sync?.associated || [])
                             .map((item) => `${item.code} x ${item.quantity}`)
                             .join(", ");
-                        showMessage(data.sync
-                            ? `Synced ${match.part_code} x ${quantity}${associated ? `; associated ${associated}` : ""}.`
-                            : `Recorded ${match.part_code} x ${quantity} in the local queue.`);
+                        showMessage(
+                            data.sync
+                                ? `Synced ${match.part_code} x ${quantity}${associated ? `; associated ${associated}` : ""}.`
+                                : data.sync_status === "skipped"
+                                  ? `Recorded ${match.part_code} x ${quantity} locally; Planner sync was skipped because no quantity remains.`
+                                  : data.sync_status === "error"
+                                    ? `Recorded ${match.part_code} x ${quantity} locally; Planner sync can be retried from Queue.`
+                                    : `Recorded ${match.part_code} x ${quantity} in the local queue.`,
+                        );
                         if (printWindow) {
                             printWindow.location = href;
                         } else {

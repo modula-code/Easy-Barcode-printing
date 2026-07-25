@@ -45,6 +45,7 @@ from queue_store import (  # noqa: E402
     list_history_dates,
     list_printed_parts,
     list_production_events,
+    record_local_production_event,
     stage_production_event,
     update_printed_part,
 )
@@ -386,6 +387,15 @@ def _planner_sync_enabled() -> bool:
     }
 
 
+def _zero_remaining(exc: PlannerSyncError) -> bool:
+    message = str(exc)
+    return (
+        exc.status_code == 409
+        and message.startswith("Only 0 ")
+        and " remain for PO " in message
+    )
+
+
 @app.post("/api/print-queue")
 def add_print_queue_item():
     payload = request.get_json(silent=True) or {}
@@ -416,12 +426,33 @@ def add_print_queue_item():
         )
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
+    if event["status"] == "skipped":
+        try:
+            item = get_printed_part(event["target_row_id"])
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 500
+        return jsonify(item=item, sync=None, sync_status="skipped"), 201
     try:
         item, synced = _push_to_planner(event)
-    except PlannerSyncError as exc:
-        return jsonify(error=str(exc)), exc.status_code
-    except ValueError as exc:
-        return jsonify(error=str(exc)), 500
+    except (PlannerSyncError, ValueError) as exc:
+        skip_sync = isinstance(exc, PlannerSyncError) and _zero_remaining(exc)
+        try:
+            item = record_local_production_event(
+                event["event_id"],
+                str(exc),
+                skip_sync=skip_sync,
+            )
+        except ValueError as local_exc:
+            return jsonify(error=str(local_exc)), 500
+        return (
+            jsonify(
+                item=item,
+                sync=None,
+                sync_status="skipped" if skip_sync else "error",
+                warning=str(exc),
+            ),
+            201,
+        )
     return jsonify(item=item, sync=synced), 201
 
 
@@ -474,8 +505,13 @@ def retry_production_event(event_id):
         event = get_production_event(event_id)
     except ValueError as exc:
         return jsonify(error=str(exc)), 404
-    if event["status"] == "synced":
-        return jsonify(error="That event is already synced with Planner."), 409
+    if event["status"] in {"synced", "skipped"}:
+        message = (
+            "That event is already synced with Planner."
+            if event["status"] == "synced"
+            else "That event is local-only and will not be synced with Planner."
+        )
+        return jsonify(error=message), 409
     try:
         item, synced = _push_to_planner(event)
     except PlannerSyncError as exc:

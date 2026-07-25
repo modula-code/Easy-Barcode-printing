@@ -293,6 +293,72 @@ def fail_production_event(event_id: str, error: str) -> None:
         )
 
 
+def record_local_production_event(
+    event_id: str,
+    error: str,
+    *,
+    skip_sync: bool = False,
+) -> dict:
+    """Record a produced barcode even when Planner did not accept it."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _connect() as connection:
+        event = connection.execute(
+            "SELECT * FROM production_events WHERE event_id = %s",
+            (event_id,),
+        ).fetchone()
+        if not event or event["action"] != "produced":
+            raise ValueError("Production event was not found.")
+
+        row = None
+        if event["target_row_id"]:
+            row = connection.execute(
+                "SELECT * FROM printed_parts WHERE id = %s",
+                (event["target_row_id"],),
+            ).fetchone()
+        if not row:
+            row = connection.execute(
+                """
+                INSERT INTO printed_parts
+                    (po_number, part_code, quantity, status, work_date, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    event["po_number"],
+                    event["part_code"],
+                    event["quantity"],
+                    "queued" if skip_sync else "error",
+                    event["work_date"],
+                    now,
+                ),
+            ).fetchone()
+        elif skip_sync and row["status"] == "error":
+            row = connection.execute(
+                """
+                UPDATE printed_parts SET status = 'queued'
+                WHERE id = %s
+                RETURNING *
+                """,
+                (row["id"],),
+            ).fetchone()
+
+        connection.execute(
+            """
+            UPDATE production_events
+            SET target_row_id = %s, status = %s, error = %s, updated_at = %s
+            WHERE event_id = %s AND status <> 'synced'
+            """,
+            (
+                row["id"],
+                "skipped" if skip_sync else "error",
+                str(error or "Planner sync failed.")[:1000],
+                now,
+                event_id,
+            ),
+        )
+    return dict(row)
+
+
 def complete_production_event(event_id: str, planner_response: dict) -> dict | None:
     plan_id = str(planner_response.get("planId") or "").strip()
     if not plan_id:
@@ -329,6 +395,14 @@ def complete_production_event(event_id: str, planner_response: dict) -> dict | N
                 != int(event["quantity"])
             ):
                 raise ValueError("Planner response included invalid SO allocations.")
+            if event["status"] == "error" and event["target_row_id"]:
+                connection.execute(
+                    """
+                    DELETE FROM printed_parts
+                    WHERE id = %s AND status IN ('queued', 'error')
+                    """,
+                    (event["target_row_id"],),
+                )
             row_ids = []
             for so_number, quantity in normalized_allocations:
                 row = connection.execute(
@@ -545,8 +619,8 @@ def get_production_event(event_id: str) -> dict:
 def list_production_events(work_date: str | None = None) -> dict:
     """Planner sync ledger: what was sent, what Planner answered, what failed.
 
-    'synced' means Planner accepted it and told us which plan/SO/day it landed
-    on; anything else never reached the plan and can be retried."""
+    'synced' means Planner accepted it. 'skipped' is an intentional local-only
+    print; pending/error events can be retried."""
     selected_date = _work_date(work_date)
     with _connect() as connection:
         rows = connection.execute(
@@ -589,7 +663,9 @@ def list_production_events(work_date: str | None = None) -> dict:
         "date": selected_date,
         "today": current_work_date(),
         "items": items,
-        "pending": sum(1 for item in items if item["status"] != "synced"),
+        "pending": sum(
+            1 for item in items if item["status"] not in {"synced", "skipped"}
+        ),
     }
 
 
