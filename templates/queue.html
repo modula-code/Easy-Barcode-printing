@@ -126,6 +126,7 @@
                 const pill = document.createElement("span");
                 const labels = {
                     synced: ["Planner synced", "success"],
+                    skipped: ["Local only", "warning"],
                     pushed: ["Recorded", "success"],
                     error: ["Needs attention", "danger"],
                     queued: ["Local", "warning"],
@@ -190,7 +191,7 @@
             function renderSync(ledger) {
                 syncEvents.replaceChildren();
                 const attention = ledger.items.filter(
-                    (item) => item.status !== "synced",
+                    (item) => !["synced", "skipped"].includes(item.status),
                 );
                 if (!ledger.enabled) {
                     syncNotice.className = "notice warning";

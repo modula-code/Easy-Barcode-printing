@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import xmlrpc.client
 import zipfile
 from html import escape
@@ -46,6 +47,7 @@ from queue_store import (  # noqa: E402
     list_history_dates,
     list_printed_parts,
     list_production_events,
+    skip_production_event,
     stage_production_event,
     update_printed_part,
 )
@@ -387,6 +389,14 @@ def _planner_sync_enabled() -> bool:
     }
 
 
+def _planner_quantity_fulfilled(error: PlannerSyncError) -> bool:
+    message = str(error).lower()
+    return error.status_code == 409 and (
+        "fulfilled" in message
+        or bool(re.search(r"\bonly\s+\d+(?:\.\d+)?\b.*\bremain\b.*\bpo\b", message))
+    )
+
+
 @app.post("/api/print-queue")
 def add_print_queue_item():
     payload = request.get_json(silent=True) or {}
@@ -417,9 +427,18 @@ def add_print_queue_item():
         )
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
+    if event["status"] == "skipped":
+        item = skip_production_event(event["event_id"], event["error"])
+        return jsonify(item=item, sync=None, sync_status="skipped"), 201
     try:
         item, synced = _push_to_planner(event)
     except PlannerSyncError as exc:
+        if _planner_quantity_fulfilled(exc):
+            try:
+                item = skip_production_event(event["event_id"], str(exc))
+            except ValueError as local_exc:
+                return jsonify(error=str(local_exc)), 500
+            return jsonify(item=item, sync=None, sync_status="skipped"), 201
         return jsonify(error=str(exc)), exc.status_code
     except ValueError as exc:
         return jsonify(error=str(exc)), 500
@@ -479,6 +498,8 @@ def retry_production_event(event_id):
         return jsonify(error=str(exc)), 404
     if event["status"] == "synced":
         return jsonify(error="That event is already synced with Planner."), 409
+    if event["status"] == "skipped":
+        return jsonify(error="Planner quantity was fulfilled; this event is local only."), 409
     try:
         item, synced = _push_to_planner(event)
     except PlannerSyncError as exc:
