@@ -165,15 +165,8 @@
             function statusPill(item) {
                 const pill = document.createElement("span");
                 const synced = item.status === "synced";
-                const skipped = item.status === "skipped";
-                pill.className = `pill ${synced ? "success" : skipped ? "warning" : item.error ? "danger" : "warning"}`;
-                pill.textContent = synced
-                    ? "Synced"
-                    : skipped
-                      ? "Local only"
-                      : item.error
-                        ? "Not sent"
-                        : "Pending";
+                pill.className = `pill ${synced ? "success" : item.error ? "danger" : "warning"}`;
+                pill.textContent = synced ? "Synced" : item.error ? "Not sent" : "Pending";
                 return pill;
             }
 
@@ -200,7 +193,6 @@
                     const time = document.createElement("span");
                     const retry = document.createElement("button");
                     const synced = item.status === "synced";
-                    const skipped = item.status === "skipped";
                     const allocations = (item.allocations || [])
                         .map((part) => `${part.soNumber} × ${part.quantity}`)
                         .join(", ");
@@ -208,7 +200,7 @@
                         .map((part) => `${part.code} × ${part.quantity}`)
                         .join(", ");
 
-                    event.className = `event ${synced || skipped ? "" : item.error ? "failed" : "pending"}`;
+                    event.className = `event ${synced ? "" : item.error ? "failed" : "pending"}`;
                     marker.className = "event-marker";
                     title.className = "event-title";
                     primaryDetail.className = "event-detail";
@@ -243,7 +235,7 @@
                     body.append(title, primaryDetail);
                     if (secondaryDetail.textContent) body.appendChild(secondaryDetail);
                     side.append(statusPill(item), time);
-                    if (!synced && !skipped) {
+                    if (!synced) {
                         retry.addEventListener("click", async () => {
                             retry.disabled = true;
                             try {
