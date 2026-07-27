@@ -11,9 +11,11 @@ services:
     build:
       context: .
     environment:
+      - POSTGRES_USER=${POSTGRES_USER:-barcode}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-barcode}
       - SERVICE_FQDN_BARCODE_8000
       - PORT=8000
-      - DATABASE_URL=${DATABASE_URL}
       - PLANNER_SYNC_ENABLED=${PLANNER_SYNC_ENABLED:-true}
       - PLANNER_API_URL=${PLANNER_API_URL:?the Planner API base URL, e.g. https://planner.example.com/api}
       - BARCODE_SYNC_TOKEN=${BARCODE_SYNC_TOKEN:?must match the Planner's BARCODE_SYNC_TOKEN}
