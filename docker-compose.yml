@@ -24,7 +24,7 @@ services:
       - ODOO_USERNAME=${ODOO_USERNAME:-}
       - ODOO_PASSWORD=${ODOO_PASSWORD:-}
     ports:
-      - "${BARCODE_PORT:-8000}:8000"
+      - "${PORT:-8000}:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/healthz || exit 1"]
       interval: 30s
