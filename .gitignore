@@ -1,4 +1,5 @@
 .env
+.DS_Store
 __pycache__/
 *.py[cod]
 .venv/
@@ -9,3 +10,10 @@ printed_parts.sqlite3*
 docs/
 test_queue.py
 test_sm_codes.py
+.claude
+docs
+test_sm_codes.py
+test_queue.py
+test_queue_pg.py
+test_lookup_behavior.py
+SHOP_FLOOR_TRAINING.md
