@@ -13,7 +13,7 @@ services:
     environment:
       - SERVICE_FQDN_BARCODE_8000
       - PORT=8000
-      - DATABASE_URL=${DATABASE_URL:?point this at the Planner Postgres, e.g. postgres://modula:PASS@planner-db:5432/modula_planner}
+      - DATABASE_URL=${DATABASE_URL}
       - PLANNER_SYNC_ENABLED=${PLANNER_SYNC_ENABLED:-true}
       - PLANNER_API_URL=${PLANNER_API_URL:?the Planner API base URL, e.g. https://planner.example.com/api}
       - BARCODE_SYNC_TOKEN=${BARCODE_SYNC_TOKEN:?must match the Planner's BARCODE_SYNC_TOKEN}
@@ -26,7 +26,11 @@ services:
     ports:
       - "${PORT:-8000}:8000"
     healthcheck:
-      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8000/healthz || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl --fail --silent http://127.0.0.1:8000/healthz || exit 1",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
