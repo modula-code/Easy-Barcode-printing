@@ -53,7 +53,7 @@
 
             <section class="metrics" aria-label="Queue summary">
                 <div class="metric">
-                    <span class="metric-label">Panel quantity</span>
+                    <span class="metric-label">Total</span>
                     <strong id="total-quantity" class="metric-value">—</strong>
                 </div>
                 <div class="metric">
@@ -61,7 +61,7 @@
                     <strong id="code-count" class="metric-value">—</strong>
                 </div>
                 <div class="metric">
-                    <span class="metric-label">Planner sync</span>
+                    <span class="metric-label">Synced</span>
                     <strong id="sync-count" class="metric-value">—</strong>
                 </div>
             </section>
@@ -144,6 +144,9 @@
                     data.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
                 document.querySelector("#code-count").textContent =
                     new Set(data.items.map((item) => item.part_code)).size;
+                document.querySelector("#sync-count").textContent = data.items
+                    .filter((item) => item.status === "synced")
+                    .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
                 clearButton.hidden = !data.items.some(
                     (item) => item.status === "queued" || item.status === "error",
                 );
@@ -189,10 +192,6 @@
                 const attention = ledger.items.filter(
                     (item) => item.status !== "synced",
                 );
-                document.querySelector("#sync-count").textContent = attention.length
-                    ? `${attention.length} issue${attention.length === 1 ? "" : "s"}`
-                    : "Ready";
-
                 if (!ledger.enabled) {
                     syncNotice.className = "notice warning";
                     syncNotice.textContent =
@@ -224,7 +223,7 @@
                     title.className = "event-title";
                     detail.className = `event-detail${item.error ? " error" : ""}`;
                     title.textContent =
-                        `${item.action === "rejected" ? "QC rejection" : "Production"} · ` +
+                        `${item.action === "rejected" ? "QC rejected" : "Production"} · ` +
                         `${item.part_code} × ${item.quantity}`;
                     detail.textContent =
                         item.error || `Waiting to send ${item.po_number} to Planner.`;

@@ -34,9 +34,8 @@
                     <p class="eyebrow">Quality correction</p>
                     <h1>Panel QC</h1>
                     <p class="lede">
-                        Reject part of a panel quantity or remove a panel code completely.
-                        Planner-synced panels are reversed in Planner and kept in History;
-                        panels not yet synced are edited in the local queue.
+                        Decrease one panel at a time. When the total reaches zero,
+                        the panel code is removed. Synced panels are reversed in Planner.
                     </p>
                 </div>
                 <div class="hero-actions">
@@ -47,7 +46,7 @@
 
             <section class="metrics" aria-label="QC summary">
                 <div class="metric">
-                    <span class="metric-label">Available panels</span>
+                    <span class="metric-label">Total</span>
                     <strong id="panel-quantity" class="metric-value">—</strong>
                 </div>
                 <div class="metric">
@@ -67,9 +66,8 @@
                     <div>
                         <h2>Panels for QC</h2>
                         <p>
-                            Use Reduce for a partial rejection, or Remove panel
-                            code to reject the complete available quantity. Panels
-                            tagged Local are not synced and edit the queue only.
+                            Each click reduces the queue total by one. The last
+                            panel removes the code; the quantity cannot go below zero.
                         </p>
                     </div>
                     <div class="filter-row">
@@ -131,19 +129,10 @@
                 return empty;
             }
 
-            async function submitRejection(item, quantity, button) {
+            async function decreasePanel(item, button) {
                 const eventKey = `qc-event:${item.id}`;
-                const quantityKey = `qc-quantity:${item.id}`;
-                const pendingQuantity = Number(sessionStorage.getItem(quantityKey)) || 0;
-                if (pendingQuantity && pendingQuantity !== quantity) {
-                    throw new Error(
-                        `Retry the pending correction for quantity ${pendingQuantity} first.`,
-                    );
-                }
-
                 const eventId = sessionStorage.getItem(eventKey) || newEventId();
                 sessionStorage.setItem(eventKey, eventId);
-                sessionStorage.setItem(quantityKey, String(quantity));
                 button.disabled = true;
                 try {
                     const result = await requestJson(
@@ -153,51 +142,21 @@
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
                                 event_id: eventId,
-                                quantity,
+                                quantity: 1,
                             }),
                         },
                     );
                     sessionStorage.removeItem(eventKey);
-                    sessionStorage.removeItem(quantityKey);
                     const associated = (result.sync?.associated || [])
                         .map((part) => `${part.code} × ${part.quantity}`)
                         .join(", ");
+                    const remaining = Number(result.item?.quantity || 0);
                     showStatus(
-                        `${item.part_code} reduced by ${quantity}` +
+                        (remaining
+                            ? `${item.part_code} total decreased to ${remaining}`
+                            : `${item.part_code} removed after total reached 0`) +
                             `${associated ? `; also reversed ${associated}` : ""}.`,
                     );
-                    await load(item.work_date);
-                } finally {
-                    button.disabled = false;
-                }
-            }
-
-            // Not-yet-synced panels live only in the local queue, so QC edits them
-            // in place (PUT to reduce, DELETE to remove) instead of reversing Planner.
-            async function reduceLocal(item, quantity, button) {
-                button.disabled = true;
-                try {
-                    await requestJson(`/api/print-queue/${item.id}`, {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            po_number: item.po_number,
-                            part_code: item.part_code,
-                            quantity: item.quantity - quantity,
-                        }),
-                    });
-                    showStatus(`${item.part_code} reduced by ${quantity} in the local queue.`);
-                    await load(item.work_date);
-                } finally {
-                    button.disabled = false;
-                }
-            }
-
-            async function removeLocal(item, button) {
-                button.disabled = true;
-                try {
-                    await requestJson(`/api/print-queue/${item.id}`, { method: "DELETE" });
-                    showStatus(`${item.part_code} removed from the local queue.`);
                     await load(item.work_date);
                 } finally {
                     button.disabled = false;
@@ -232,20 +191,13 @@
                     const meta = document.createElement("div");
                     const quantity = document.createElement("div");
                     const actions = document.createElement("div");
-                    const field = document.createElement("label");
-                    const caption = document.createElement("span");
-                    const input = document.createElement("input");
-                    const reduce = document.createElement("button");
-                    const remove = document.createElement("button");
-                    const pendingQuantity =
-                        Number(sessionStorage.getItem(`qc-quantity:${item.id}`)) || 0;
+                    const decrease = document.createElement("button");
 
                     row.className = "record qc-record";
                     code.className = "record-code";
                     meta.className = "record-meta";
                     quantity.className = "record-quantity";
                     actions.className = "qc-actions";
-                    field.className = "field";
                     const synced = item.status === "synced";
                     code.textContent = item.part_code;
                     meta.textContent =
@@ -254,74 +206,31 @@
                     quantity.append(
                         document.createTextNode(item.quantity),
                         Object.assign(document.createElement("small"), {
-                            textContent: "available",
+                            textContent: "total",
                         }),
                     );
 
-                    caption.textContent = "Reject qty";
-                    input.type = "number";
-                    input.min = "1";
-                    input.max = String(Math.max(1, item.quantity - 1));
-                    input.step = "1";
-                    input.inputMode = "numeric";
-                    input.placeholder = item.quantity > 1 ? "1" : "—";
-                    input.disabled = item.quantity < 2;
-                    if (pendingQuantity && pendingQuantity < item.quantity) {
-                        input.value = String(pendingQuantity);
-                    }
-                    field.append(caption, input);
-
-                    reduce.type = "button";
-                    reduce.className = "secondary";
-                    reduce.textContent = "Reduce quantity";
-                    reduce.disabled = item.quantity < 2;
-                    reduce.addEventListener("click", async () => {
-                        const rejected = Number(input.value);
-                        if (
-                            !Number.isInteger(rejected) ||
-                            rejected < 1 ||
-                            rejected >= item.quantity
-                        ) {
-                            showStatus(
-                                `Enter a quantity from 1 to ${item.quantity - 1}.`,
-                                true,
-                            );
-                            input.focus();
-                            return;
-                        }
+                    decrease.type = "button";
+                    decrease.className = "danger";
+                    decrease.textContent = "Decrease by 1";
+                    decrease.addEventListener("click", async () => {
+                        const remaining = item.quantity - 1;
                         if (
                             !confirm(
-                                `Reduce ${item.part_code} from ${item.quantity} to ${item.quantity - rejected}?`,
+                                remaining
+                                    ? `Decrease ${item.part_code} from ${item.quantity} to ${remaining}?`
+                                    : `Decrease ${item.part_code} to 0 and remove it?`,
                             )
                         )
                             return;
                         try {
-                            if (synced) await submitRejection(item, rejected, reduce);
-                            else await reduceLocal(item, rejected, reduce);
+                            await decreasePanel(item, decrease);
                         } catch (error) {
                             showStatus(error.message, true);
                         }
                     });
 
-                    remove.type = "button";
-                    remove.className = "danger";
-                    remove.textContent = "Remove panel code";
-                    remove.addEventListener("click", async () => {
-                        if (
-                            !confirm(
-                                `Remove ${item.part_code} and reject all ${item.quantity} panels?`,
-                            )
-                        )
-                            return;
-                        try {
-                            if (synced) await submitRejection(item, item.quantity, remove);
-                            else await removeLocal(item, remove);
-                        } catch (error) {
-                            showStatus(error.message, true);
-                        }
-                    });
-
-                    actions.append(field, reduce, remove);
+                    actions.append(decrease);
                     row.append(code, meta, quantity, actions);
                     records.appendChild(row);
                 }

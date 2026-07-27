@@ -444,6 +444,27 @@ def update_printed_part(
     return dict(updated)
 
 
+def decrement_printed_part(row_id: int) -> dict | None:
+    _ensure_schema()
+    with _queue_lock, _connect() as connection:
+        row = connection.execute(
+            "SELECT * FROM printed_parts WHERE id = %s FOR UPDATE",
+            (row_id,),
+        ).fetchone()
+        if not row or row["status"] in {"pushed", "synced"}:
+            raise ValueError("Queue row was not found.")
+        if row["work_date"] != current_work_date():
+            raise ValueError("Archived queue rows cannot be edited.")
+        if int(row["quantity"]) <= 1:
+            connection.execute("DELETE FROM printed_parts WHERE id = %s", (row_id,))
+            return None
+        updated = connection.execute(
+            "UPDATE printed_parts SET quantity = quantity - 1 WHERE id = %s RETURNING *",
+            (row_id,),
+        ).fetchone()
+    return dict(updated)
+
+
 def delete_printed_part(row_id: int) -> None:
     _ensure_schema()
     with _queue_lock, _connect() as connection:

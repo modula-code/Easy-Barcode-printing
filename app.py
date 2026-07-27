@@ -38,6 +38,7 @@ from queue_store import (  # noqa: E402
     add_printed_part,
     clear_printed_parts,
     complete_production_event,
+    decrement_printed_part,
     delete_printed_part,
     fail_production_event,
     get_printed_part,
@@ -430,6 +431,8 @@ def reject_print_queue_item(item_id):
     payload = request.get_json(silent=True) or {}
     try:
         item = get_printed_part(item_id)
+        if item["status"] != "synced":
+            return jsonify(item=decrement_printed_part(item_id), sync=None)
         event = stage_production_event(
             str(payload.get("event_id", "")),
             "rejected",

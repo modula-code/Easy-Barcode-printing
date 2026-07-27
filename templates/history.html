@@ -34,8 +34,8 @@
                     <p class="eyebrow">Production audit</p>
                     <h1>History</h1>
                     <p class="lede">
-                        Review what was produced, what QC reversed, and the panel
-                        balance left for any work date.
+                        Review what synced, what QC rejected, and the total panel
+                        quantity left for any work date.
                     </p>
                 </div>
                 <div class="hero-actions">
@@ -59,7 +59,7 @@
                 <div>
                     <section class="metrics" aria-label="Daily history summary">
                         <div class="metric">
-                            <span class="metric-label">Produced</span>
+                            <span class="metric-label">Synced</span>
                             <strong id="produced-total" class="metric-value">—</strong>
                         </div>
                         <div class="metric">
@@ -67,7 +67,7 @@
                             <strong id="rejected-total" class="metric-value">—</strong>
                         </div>
                         <div class="metric">
-                            <span class="metric-label">Panel balance</span>
+                            <span class="metric-label">Total</span>
                             <strong id="balance-total" class="metric-value">—</strong>
                         </div>
                     </section>
@@ -85,7 +85,7 @@
                     <section class="panel">
                         <div class="panel-header">
                             <div>
-                                <h2>Panel balance</h2>
+                                <h2>Total</h2>
                                 <p>Panel quantities remaining after QC corrections.</p>
                             </div>
                         </div>
@@ -211,7 +211,7 @@
                     retry.className = "secondary";
                     retry.textContent = "Retry sync";
                     title.textContent =
-                        `${item.action === "rejected" ? "QC rejected" : "Produced"} ` +
+                        `${item.action === "rejected" ? "QC rejected" : synced ? "Synced" : "Sync pending"} ` +
                         `${item.part_code} × ${item.quantity}`;
                     primaryDetail.textContent = [
                         item.po_number,
@@ -276,8 +276,8 @@
                 if (!queue.items.length) {
                     balanceRecords.append(
                         emptyState(
-                            "No panel balance.",
-                            " No panel quantity remains for this date.",
+                            "No total quantity.",
+                            " No panels remain for this date.",
                         ),
                     );
                     return;
