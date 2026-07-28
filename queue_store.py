@@ -10,6 +10,7 @@ from psycopg.rows import dict_row
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_TIMEZONE = ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Kolkata"))
+QC_DISPOSITIONS = ("Scrap", "Return to vendor", "Rework", "Use as it is")
 # ponytail: one process-wide lock serialises writes for the single-worker
 # gunicorn setup (workers=1). If this ever runs multiple workers/processes,
 # drop the lock and lean on the Postgres unique constraints + row locks.
@@ -101,10 +102,20 @@ def _ensure_schema() -> None:
                     status TEXT NOT NULL DEFAULT 'pending',
                     error TEXT,
                     planner_response TEXT,
+                    problem_description TEXT NOT NULL DEFAULT '',
+                    disposition TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
+            )
+            connection.execute(
+                "ALTER TABLE production_events "
+                "ADD COLUMN IF NOT EXISTS problem_description TEXT NOT NULL DEFAULT ''"
+            )
+            connection.execute(
+                "ALTER TABLE production_events "
+                "ADD COLUMN IF NOT EXISTS disposition TEXT NOT NULL DEFAULT ''"
             )
         _schema_ready = True
 
@@ -136,6 +147,27 @@ def _so_number(value: str) -> str:
     return so_number
 
 
+def _event_id(value: str) -> str:
+    event_id = str(value or "").strip()
+    if len(event_id) < 8 or len(event_id) > 200:
+        raise ValueError("event_id must be between 8 and 200 characters.")
+    return event_id
+
+
+def _qc_details(problem_description: str, disposition: str) -> tuple[str, str]:
+    description = str(problem_description or "").strip()
+    selected_disposition = str(disposition or "").strip()
+    if not description:
+        raise ValueError("problem_description is required.")
+    if len(description) > 300:
+        raise ValueError("problem_description must be 300 characters or fewer.")
+    if selected_disposition not in QC_DISPOSITIONS:
+        raise ValueError(
+            "disposition must be one of: " + ", ".join(QC_DISPOSITIONS) + "."
+        )
+    return description, selected_disposition
+
+
 def get_printed_part(row_id: int) -> dict:
     _ensure_schema()
     with _queue_lock, _connect() as connection:
@@ -159,15 +191,20 @@ def stage_production_event(
     *,
     planner_plan_id: str = "",
     target_row_id: int | None = None,
+    problem_description: str = "",
+    disposition: str = "",
 ) -> dict:
-    event = str(event_id or "").strip()
-    if len(event) < 8 or len(event) > 200:
-        raise ValueError("event_id must be between 8 and 200 characters.")
+    event = _event_id(event_id)
     if action not in {"produced", "rejected"}:
         raise ValueError("action must be produced or rejected.")
     code, qty = _part_qty(part_code, quantity)
     po = _po_number(po_number)
     so = _so_number(so_number) if action == "rejected" else str(so_number or "").strip().upper()
+    description, selected_disposition = (
+        _qc_details(problem_description, disposition)
+        if action == "rejected"
+        else ("", "")
+    )
     if not str(work_date or "").strip():
         raise ValueError("work_date is required.")
     work_date = _work_date(work_date)
@@ -179,7 +216,17 @@ def stage_production_event(
             (event,),
         ).fetchone()
         if existing:
-            expected = (action, po, so, code, qty, work_date, target_row_id)
+            expected = (
+                action,
+                po,
+                so,
+                code,
+                qty,
+                work_date,
+                target_row_id,
+                description,
+                selected_disposition,
+            )
             actual = (
                 existing["action"],
                 existing["po_number"],
@@ -188,6 +235,8 @@ def stage_production_event(
                 existing["quantity"],
                 existing["work_date"],
                 existing["target_row_id"] if action == "rejected" else None,
+                existing["problem_description"],
+                existing["disposition"],
             )
             if actual != expected:
                 raise ValueError("event_id was already used with different production data.")
@@ -203,8 +252,9 @@ def stage_production_event(
             """
             INSERT INTO production_events
                 (event_id, action, po_number, so_number, part_code, quantity,
-                 work_date, target_row_id, planner_plan_id, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 work_date, target_row_id, planner_plan_id, problem_description,
+                 disposition, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 event,
@@ -216,6 +266,8 @@ def stage_production_event(
                 work_date,
                 target_row_id,
                 str(planner_plan_id or "").strip(),
+                description,
+                selected_disposition,
                 now,
                 now,
             ),
@@ -520,6 +572,17 @@ def update_printed_part(
     return dict(updated)
 
 
+def _decrement_row(connection, row: dict) -> dict | None:
+    if int(row["quantity"]) <= 1:
+        connection.execute("DELETE FROM printed_parts WHERE id = %s", (row["id"],))
+        return None
+    updated = connection.execute(
+        "UPDATE printed_parts SET quantity = quantity - 1 WHERE id = %s RETURNING *",
+        (row["id"],),
+    ).fetchone()
+    return dict(updated)
+
+
 def decrement_printed_part(row_id: int) -> dict | None:
     _ensure_schema()
     with _queue_lock, _connect() as connection:
@@ -531,14 +594,76 @@ def decrement_printed_part(row_id: int) -> dict | None:
             raise ValueError("Queue row was not found.")
         if row["work_date"] != current_work_date():
             raise ValueError("Archived queue rows cannot be edited.")
-        if int(row["quantity"]) <= 1:
-            connection.execute("DELETE FROM printed_parts WHERE id = %s", (row_id,))
-            return None
-        updated = connection.execute(
-            "UPDATE printed_parts SET quantity = quantity - 1 WHERE id = %s RETURNING *",
+        return _decrement_row(connection, row)
+
+
+def record_local_rejection(
+    event_id: str,
+    row_id: int,
+    problem_description: str,
+    disposition: str,
+) -> dict | None:
+    event = _event_id(event_id)
+    description, selected_disposition = _qc_details(
+        problem_description, disposition
+    )
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _ensure_schema()
+    with _queue_lock, _connect() as connection:
+        existing = connection.execute(
+            "SELECT * FROM production_events WHERE event_id = %s",
+            (event,),
+        ).fetchone()
+        if existing:
+            expected = ("rejected", row_id, description, selected_disposition)
+            actual = (
+                existing["action"],
+                existing["target_row_id"],
+                existing["problem_description"],
+                existing["disposition"],
+            )
+            if actual != expected:
+                raise ValueError(
+                    "event_id was already used with different production data."
+                )
+            row = connection.execute(
+                "SELECT * FROM printed_parts WHERE id = %s AND quantity > 0",
+                (row_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+        row = connection.execute(
+            "SELECT * FROM printed_parts WHERE id = %s FOR UPDATE",
             (row_id,),
         ).fetchone()
-    return dict(updated)
+        if not row or row["status"] in {"pushed", "synced"}:
+            raise ValueError("Queue row was not found.")
+        if row["work_date"] != current_work_date():
+            raise ValueError("Archived queue rows cannot be edited.")
+        connection.execute(
+            """
+            INSERT INTO production_events
+                (event_id, action, po_number, so_number, part_code, quantity,
+                 work_date, target_row_id, planner_plan_id, status,
+                 problem_description, disposition, created_at, updated_at)
+            VALUES (%s, 'rejected', %s, %s, %s, 1, %s, %s, %s, 'skipped',
+                    %s, %s, %s, %s)
+            """,
+            (
+                event,
+                row["po_number"],
+                row["so_number"],
+                row["part_code"],
+                row["work_date"],
+                row_id,
+                row["planner_plan_id"],
+                description,
+                selected_disposition,
+                now,
+                now,
+            ),
+        )
+        return _decrement_row(connection, row)
 
 
 def delete_printed_part(row_id: int) -> None:
@@ -634,6 +759,8 @@ def list_production_events(work_date: str | None = None) -> dict:
                 "work_date": row["work_date"],
                 "status": row["status"],
                 "error": row["error"],
+                "problem_description": row["problem_description"],
+                "disposition": row["disposition"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "plan_id": row["planner_plan_id"] or response.get("planId") or "",
@@ -651,6 +778,22 @@ def list_production_events(work_date: str | None = None) -> dict:
         "pending": sum(
             1 for item in items if item["status"] not in {"synced", "skipped"}
         ),
+    }
+
+
+def list_qc_records(work_date: str | None = None) -> dict:
+    ledger = list_production_events(work_date)
+    items = [
+        item
+        for item in ledger["items"]
+        if item["action"] == "rejected"
+        and item["status"] in {"synced", "skipped"}
+    ]
+    items.reverse()
+    return {
+        "date": ledger["date"],
+        "today": ledger["today"],
+        "items": items,
     }
 
 

@@ -34,11 +34,18 @@
                     <p class="eyebrow">Quality correction</p>
                     <h1>Panel QC</h1>
                     <p class="lede">
-                        Decrease one panel at a time. When the total reaches zero,
-                        the panel code is removed. Synced panels are reversed in Planner.
+                        Record the problem and disposition, then reject one panel.
+                        Every QC action is retained for the XLSX report and synced
+                        panels are reversed in Planner.
                     </p>
                 </div>
                 <div class="hero-actions">
+                    <a
+                        id="qc-export-link"
+                        class="button secondary"
+                        href="/api/qc/export.xlsx"
+                        >Export QC XLSX</a
+                    >
                     <a class="button secondary" href="/queue">View queue</a>
                     <a class="button secondary" href="/history">View history</a>
                 </div>
@@ -66,8 +73,8 @@
                     <div>
                         <h2>Panels for QC</h2>
                         <p>
-                            Each click reduces the queue total by one. The last
-                            panel removes the code; the quantity cannot go below zero.
+                            Each completed QC record reduces the total by one. The
+                            last panel removes the code; quantity cannot go below zero.
                         </p>
                     </div>
                     <div class="filter-row">
@@ -95,13 +102,59 @@
             </section>
         </main>
 
+        <dialog id="qc-dialog" class="qc-dialog">
+            <form id="qc-form">
+                <div>
+                    <p class="eyebrow">Record non-conformance</p>
+                    <h2>Reject one panel</h2>
+                    <p id="qc-dialog-panel" class="qc-dialog-panel"></p>
+                </div>
+                <label class="field">
+                    <span>Problem description</span>
+                    <textarea
+                        id="qc-description"
+                        rows="3"
+                        maxlength="300"
+                        placeholder="Describe the quality problem"
+                        required
+                    ></textarea>
+                </label>
+                <label class="field">
+                    <span>Disposition</span>
+                    <select id="qc-disposition" required>
+                        <option value="">Select disposition</option>
+                        {% for disposition in qc_dispositions %}
+                        <option value="{{ disposition }}">{{ disposition }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <p id="qc-dialog-error" class="status error" aria-live="polite"></p>
+                <div class="button-row qc-dialog-actions">
+                    <button id="qc-cancel" class="secondary" type="button">
+                        Cancel
+                    </button>
+                    <button id="qc-submit" class="danger" type="submit">
+                        Reject 1 panel
+                    </button>
+                </div>
+            </form>
+        </dialog>
+
         <script>
             const records = document.querySelector("#qc-records");
             const searchInput = document.querySelector("#search");
             const dateInput = document.querySelector("#qc-date");
             const statusText = document.querySelector("#status");
             const qcNotice = document.querySelector("#qc-notice");
+            const qcDialog = document.querySelector("#qc-dialog");
+            const qcForm = document.querySelector("#qc-form");
+            const qcDialogPanel = document.querySelector("#qc-dialog-panel");
+            const qcDescription = document.querySelector("#qc-description");
+            const qcDisposition = document.querySelector("#qc-disposition");
+            const qcDialogError = document.querySelector("#qc-dialog-error");
+            const qcSubmit = document.querySelector("#qc-submit");
             let panels = [];
+            let pendingPanel = null;
 
             function showStatus(message, isError = false) {
                 statusText.textContent = message;
@@ -129,38 +182,47 @@
                 return empty;
             }
 
-            async function decreasePanel(item, button) {
+            async function decreasePanel(item, problemDescription, disposition) {
                 const eventKey = `qc-event:${item.id}`;
                 const eventId = sessionStorage.getItem(eventKey) || newEventId();
                 sessionStorage.setItem(eventKey, eventId);
-                button.disabled = true;
-                try {
-                    const result = await requestJson(
-                        `/api/print-queue/${item.id}/reject`,
-                        {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                event_id: eventId,
-                                quantity: 1,
-                            }),
-                        },
-                    );
-                    sessionStorage.removeItem(eventKey);
-                    const associated = (result.sync?.associated || [])
-                        .map((part) => `${part.code} × ${part.quantity}`)
-                        .join(", ");
-                    const remaining = Number(result.item?.quantity || 0);
-                    showStatus(
-                        (remaining
-                            ? `${item.part_code} total decreased to ${remaining}`
-                            : `${item.part_code} removed after total reached 0`) +
-                            `${associated ? `; also reversed ${associated}` : ""}.`,
-                    );
-                    await load(item.work_date);
-                } finally {
-                    button.disabled = false;
-                }
+                const result = await requestJson(
+                    `/api/print-queue/${item.id}/reject`,
+                    {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            event_id: eventId,
+                            quantity: 1,
+                            problem_description: problemDescription,
+                            disposition,
+                        }),
+                    },
+                );
+                sessionStorage.removeItem(eventKey);
+                const associated = (result.sync?.associated || [])
+                    .map((part) => `${part.code} × ${part.quantity}`)
+                    .join(", ");
+                const remaining = Number(result.item?.quantity || 0);
+                showStatus(
+                    (remaining
+                        ? `${item.part_code} total decreased to ${remaining}`
+                        : `${item.part_code} removed after total reached 0`) +
+                        `; disposition ${disposition}` +
+                        `${associated ? `; also reversed ${associated}` : ""}.`,
+                );
+                await load(item.work_date);
+            }
+
+            function openQcDialog(item) {
+                pendingPanel = item;
+                qcForm.reset();
+                qcDialogError.textContent = "";
+                qcDialogPanel.textContent =
+                    `${item.part_code} · ${item.po_number}` +
+                    `${item.so_number ? ` · ${item.so_number}` : ""}`;
+                qcDialog.showModal();
+                qcDescription.focus();
             }
 
             function render() {
@@ -213,22 +275,7 @@
                     decrease.type = "button";
                     decrease.className = "danger";
                     decrease.textContent = "Decrease by 1";
-                    decrease.addEventListener("click", async () => {
-                        const remaining = item.quantity - 1;
-                        if (
-                            !confirm(
-                                remaining
-                                    ? `Decrease ${item.part_code} from ${item.quantity} to ${remaining}?`
-                                    : `Decrease ${item.part_code} to 0 and remove it?`,
-                            )
-                        )
-                            return;
-                        try {
-                            await decreasePanel(item, decrease);
-                        } catch (error) {
-                            showStatus(error.message, true);
-                        }
-                    });
+                    decrease.addEventListener("click", () => openQcDialog(item));
 
                     actions.append(decrease);
                     row.append(code, meta, quantity, actions);
@@ -247,6 +294,8 @@
                 panels = queue.items;
                 dateInput.value = queue.date;
                 dateInput.max = queue.today;
+                document.querySelector("#qc-export-link").href =
+                    `/api/qc/export.xlsx?date=${encodeURIComponent(queue.date)}`;
                 document.querySelector("#panel-quantity").textContent =
                     panels.reduce(
                         (sum, item) => sum + Number(item.quantity || 0),
@@ -271,6 +320,31 @@
                 }
                 render();
             }
+
+            document.querySelector("#qc-cancel").addEventListener("click", () => {
+                qcDialog.close();
+                pendingPanel = null;
+            });
+
+            qcForm.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                if (!pendingPanel) return;
+                qcSubmit.disabled = true;
+                qcDialogError.textContent = "";
+                try {
+                    await decreasePanel(
+                        pendingPanel,
+                        qcDescription.value.trim(),
+                        qcDisposition.value,
+                    );
+                    qcDialog.close();
+                    pendingPanel = null;
+                } catch (error) {
+                    qcDialogError.textContent = error.message;
+                } finally {
+                    qcSubmit.disabled = false;
+                }
+            });
 
             searchInput.addEventListener("input", render);
             dateInput.addEventListener("change", () => {

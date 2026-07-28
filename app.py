@@ -4,6 +4,7 @@ import os
 import re
 import xmlrpc.client
 import zipfile
+from datetime import date
 from html import escape
 
 from dotenv import load_dotenv
@@ -36,10 +37,10 @@ from pdf_service import (  # noqa: E402
 )
 from planner_client import PlannerSyncError, sync_production_event  # noqa: E402
 from queue_store import (  # noqa: E402
+    QC_DISPOSITIONS,
     add_printed_part,
     clear_printed_parts,
     complete_production_event,
-    decrement_printed_part,
     delete_printed_part,
     fail_production_event,
     get_printed_part,
@@ -47,6 +48,8 @@ from queue_store import (  # noqa: E402
     list_history_dates,
     list_printed_parts,
     list_production_events,
+    list_qc_records,
+    record_local_rejection,
     skip_production_event,
     stage_production_event,
     update_printed_part,
@@ -75,7 +78,7 @@ def history_page():
 
 @app.get("/qc")
 def qc_page():
-    return render_template("qc.html")
+    return render_template("qc.html", qc_dispositions=QC_DISPOSITIONS)
 
 
 @app.get("/healthz")
@@ -287,6 +290,66 @@ def history_dates():
     return jsonify(dates=list_history_dates())
 
 
+def _xlsx_file(sheet_name, sheet_xml, styles_xml=None):
+    styles_override = (
+        '<Override PartName="/xl/styles.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        if styles_xml
+        else ""
+    )
+    styles_relationship = (
+        '<Relationship Id="rId2" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+        'Target="styles.xml"/>'
+        if styles_xml
+        else ""
+    )
+    files = {
+        "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>""".replace("</Types>", styles_override + "</Types>"),
+        "_rels/.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>""",
+        "xl/workbook.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="{escape(sheet_name, quote=True)}" sheetId="1" r:id="rId1"/></sheets>
+</workbook>""",
+        "xl/_rels/workbook.xml.rels": (
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>"""
+            + styles_relationship
+            + "</Relationships>"
+        ),
+        "xl/worksheets/sheet1.xml": sheet_xml,
+    }
+    if styles_xml:
+        files["xl/styles.xml"] = styles_xml
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as workbook:
+        for name, content in files.items():
+            workbook.writestr(name, content)
+    out.seek(0)
+    return out
+
+
+def _xlsx_cell(reference, value="", style=0, *, number=False):
+    if value == "":
+        return f'<c r="{reference}" s="{style}"/>'
+    if number:
+        return f'<c r="{reference}" s="{style}"><v>{value}</v></c>'
+    return (
+        f'<c r="{reference}" s="{style}" t="inlineStr"><is><t>'
+        f"{escape(str(value))}</t></is></c>"
+    )
+
+
 def _queue_xlsx(rows):
     sheet_rows = [
         '<row r="1"><c r="A1" t="inlineStr"><is><t>Date</t></is></c>'
@@ -303,38 +366,169 @@ def _queue_xlsx(rows):
             f'<c r="D{row_number}"><v>{int(item.get("quantity") or 0)}</v></c>'
             "</row>"
         )
-
-    files = {
-        "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>
-<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-</Types>""",
-        "_rels/.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>""",
-        "xl/workbook.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<sheets><sheet name="Queue" sheetId="1" r:id="rId1"/></sheets>
-</workbook>""",
-        "xl/_rels/workbook.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-</Relationships>""",
-        "xl/worksheets/sheet1.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    return _xlsx_file(
+        "Queue",
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"""
         + "".join(sheet_rows)
         + "</sheetData></worksheet>",
-    }
-    out = io.BytesIO()
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as workbook:
-        for name, content in files.items():
-            workbook.writestr(name, content)
-    out.seek(0)
-    return out
+    )
+
+
+def _qc_xlsx(rows):
+    reserved_rows = max(10, len(rows))
+    data_end = reserved_rows + 2
+    signature_row = data_end + 2
+    sheet_rows = [
+        '<row r="1" ht="32" customHeight="1">'
+        + "".join(
+            _xlsx_cell(f"{column}1", "Firewall NC Report" if column == "A" else "", 1)
+            for column in "ABCDEF"
+        )
+        + "</row>",
+        '<row r="2" ht="26" customHeight="1">'
+        + "".join(
+            _xlsx_cell(f"{column}2", heading, 2)
+            for column, heading in zip(
+                "ABCDEF",
+                (
+                    "Sr no.",
+                    "Date",
+                    "Panel no",
+                    "Problem Description",
+                    "Qty",
+                    "Disposition",
+                ),
+            )
+        )
+        + "</row>",
+    ]
+    for index in range(reserved_rows):
+        row_number = index + 3
+        item = rows[index] if index < len(rows) else {}
+        work_date = str(item.get("work_date") or "")
+        problem_description = str(item.get("problem_description") or "")
+        row_height = max(
+            24,
+            18 * max(1, (len(problem_description) + 32) // 33),
+        )
+        try:
+            date_value = (date.fromisoformat(work_date) - date(1899, 12, 30)).days
+            date_cell = _xlsx_cell(f"B{row_number}", date_value, 6, number=True)
+        except ValueError:
+            date_cell = _xlsx_cell(f"B{row_number}", work_date, 3)
+        sheet_rows.append(
+            f'<row r="{row_number}" ht="{row_height}" customHeight="1">'
+            + _xlsx_cell(
+                f"A{row_number}",
+                index + 1 if item else "",
+                5,
+                number=bool(item),
+            )
+            + date_cell
+            + _xlsx_cell(f"C{row_number}", item.get("part_code") or "", 3)
+            + _xlsx_cell(
+                f"D{row_number}",
+                problem_description,
+                4,
+            )
+            + _xlsx_cell(
+                f"E{row_number}",
+                int(item.get("quantity") or 0) if item else "",
+                5,
+                number=bool(item),
+            )
+            + _xlsx_cell(
+                f"F{row_number}",
+                item.get("disposition") or "",
+                3,
+            )
+            + "</row>"
+        )
+    sheet_rows.extend(
+        (
+            f'<row r="{data_end + 1}" ht="38" customHeight="1">'
+            + "".join(_xlsx_cell(f"{column}{data_end + 1}", "", 3) for column in "ABCDEF")
+            + "</row>",
+            f'<row r="{signature_row}" ht="30" customHeight="1">'
+            + "".join(
+                _xlsx_cell(f"{column}{signature_row}", label, 7)
+                for column, label in zip(
+                    "ABCDEF",
+                    (
+                        "DKP Quality",
+                        "DKP Production",
+                        "",
+                        "Ayena SQE",
+                        "",
+                        "Ayena Operation",
+                    ),
+                )
+            )
+            + "</row>",
+        )
+    )
+    sheet_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<dimension ref="A1:F{signature_row}"/>
+<sheetViews><sheetView showGridLines="0" workbookViewId="0"/></sheetViews>
+<sheetFormatPr defaultRowHeight="24"/>
+<cols>
+<col min="1" max="1" width="10.5" customWidth="1"/>
+<col min="2" max="2" width="14.5" customWidth="1"/>
+<col min="3" max="3" width="11.5" customWidth="1"/>
+<col min="4" max="4" width="22.5" customWidth="1"/>
+<col min="5" max="5" width="5.5" customWidth="1"/>
+<col min="6" max="6" width="18" customWidth="1"/>
+</cols>
+<sheetData>{"".join(sheet_rows)}</sheetData>
+<mergeCells count="1"><mergeCell ref="A1:F1"/></mergeCells>
+<dataValidations count="1">
+<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1"
+ errorTitle="Choose a disposition" error="Select one of the listed options."
+ promptTitle="Disposition" prompt="Select the QC decision." sqref="F3:F{data_end}">
+<formula1>"{",".join(QC_DISPOSITIONS)}"</formula1>
+</dataValidation>
+</dataValidations>
+<pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>
+<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>
+</worksheet>"""
+    styles_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="1"><numFmt numFmtId="164" formatCode="dd-mm-yyyy"/></numFmts>
+<fonts count="3">
+<font><sz val="11"/><name val="Arial"/><family val="2"/></font>
+<font><b/><sz val="18"/><name val="Arial"/><family val="2"/></font>
+<font><b/><sz val="11"/><name val="Arial"/><family val="2"/></font>
+</fonts>
+<fills count="2">
+<fill><patternFill patternType="none"/></fill>
+<fill><patternFill patternType="gray125"/></fill>
+</fills>
+<borders count="2">
+<border><left/><right/><top/><bottom/><diagonal/></border>
+<border>
+<left style="thin"><color rgb="FF000000"/></left>
+<right style="thin"><color rgb="FF000000"/></right>
+<top style="thin"><color rgb="FF000000"/></top>
+<bottom style="thin"><color rgb="FF000000"/></bottom>
+<diagonal/>
+</border>
+</borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="8">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="2" fillId="0" borderId="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="1" fontId="0" fillId="0" borderId="1" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="1" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="2" fillId="0" borderId="1" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" shrinkToFit="1"/></xf>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"""
+    return _xlsx_file("QC Report", sheet_xml, styles_xml)
 
 
 @app.get("/api/print-queue/export.xlsx")
@@ -348,6 +542,21 @@ def export_print_queue_xlsx():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
         download_name=f"print-queue-{queue['date']}.xlsx",
+        max_age=0,
+    )
+
+
+@app.get("/api/qc/export.xlsx")
+def export_qc_xlsx():
+    try:
+        report = list_qc_records(request.args.get("date"))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return send_file(
+        _qc_xlsx(report["items"]),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"firewall-nc-report-{report['date']}.xlsx",
         max_age=0,
     )
 
@@ -448,20 +657,33 @@ def add_print_queue_item():
 @app.post("/api/print-queue/<int:item_id>/reject")
 def reject_print_queue_item(item_id):
     payload = request.get_json(silent=True) or {}
+    event_id = str(payload.get("event_id", ""))
+    problem_description = str(payload.get("problem_description", ""))
+    disposition = str(payload.get("disposition", ""))
     try:
         item = get_printed_part(item_id)
         if item["status"] != "synced":
-            return jsonify(item=decrement_printed_part(item_id), sync=None)
+            return jsonify(
+                item=record_local_rejection(
+                    event_id,
+                    item_id,
+                    problem_description,
+                    disposition,
+                ),
+                sync=None,
+            )
         event = stage_production_event(
-            str(payload.get("event_id", "")),
+            event_id,
             "rejected",
             item["po_number"],
             item["so_number"],
             item["part_code"],
-            payload.get("quantity", 1),
+            1,
             item["work_date"],
             planner_plan_id=item["planner_plan_id"],
             target_row_id=item_id,
+            problem_description=problem_description,
+            disposition=disposition,
         )
     except ValueError as exc:
         return jsonify(error=str(exc)), 400

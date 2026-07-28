@@ -623,6 +623,8 @@ def _direct_purchase_line_match(
         for code in dict.fromkeys(normalized_codes)
     }
     final_lines = matching_lines(required)
+    if len(normalized_codes) == 1:
+        final_lines = matching_lines(required + required) or final_lines
     candidate_lines = list(final_lines)
     for code_lines in lines_by_code.values():
         candidate_lines.extend(code_lines)
@@ -864,7 +866,16 @@ def _match_codes(
         if code in template_ids_by_code and template_id is not None:
             template_ids_by_code[code].add(template_id)
             counts = template_code_counts_by_code[code]
-            counts[template_id] = counts.get(template_id, 0) + 1
+            occurrences = (
+                2
+                if re.search(
+                    r"\bIN\s*,\s*OUT\b",
+                    _many2one_name(line.get("product_id")),
+                    re.IGNORECASE,
+                )
+                else 1
+            )
+            counts[template_id] = counts.get(template_id, 0) + occurrences
 
     candidate_template_ids = sorted(
         {
