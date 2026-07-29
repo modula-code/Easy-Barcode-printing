@@ -366,9 +366,19 @@ def _local_hour(value):
     return timestamp.astimezone(APP_TIMEZONE).hour
 
 
+def _production_plan_id(label):
+    match = re.search(r"\bW(\d+)-A(\d+)", str(label or ""), re.IGNORECASE)
+    return f"W{match.group(1)}-A{match.group(2)}" if match else ""
+
+
 def _hourly_production_rows(queue_rows, event_rows):
     grouped = {}
     event_totals = {}
+    plan_ids = {
+        str(event.get("plan_id") or ""): plan_id
+        for event in event_rows
+        if (plan_id := _production_plan_id(event.get("plan_label")))
+    }
 
     def add_quantity(key, quantity, created_at):
         row = grouped.setdefault(
@@ -405,7 +415,7 @@ def _hourly_production_rows(queue_rows, event_rows):
     for event in completed_events:
         key = (
             str(event.get("po_number") or ""),
-            str(event.get("plan_id") or "")
+            _production_plan_id(event.get("plan_label"))
             if event.get("status") == "synced"
             else "",
             str(event.get("part_code") or ""),
@@ -418,7 +428,7 @@ def _hourly_production_rows(queue_rows, event_rows):
     for item in queue_rows:
         key = (
             str(item.get("po_number") or ""),
-            str(item.get("planner_plan_id") or "")
+            plan_ids.get(str(item.get("planner_plan_id") or ""), "")
             if item.get("status") == "synced"
             else "",
             str(item.get("part_code") or ""),
