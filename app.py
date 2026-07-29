@@ -4,7 +4,7 @@ import os
 import re
 import xmlrpc.client
 import zipfile
-from datetime import date
+from datetime import date, datetime, timezone
 from html import escape
 
 from dotenv import load_dotenv
@@ -37,6 +37,7 @@ from pdf_service import (  # noqa: E402
 )
 from planner_client import PlannerSyncError, sync_production_event  # noqa: E402
 from queue_store import (  # noqa: E402
+    APP_TIMEZONE,
     QC_DISPOSITIONS,
     add_printed_part,
     clear_printed_parts,
@@ -60,6 +61,10 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = int(
     os.getenv("MAX_UPLOAD_SIZE_MB", "20")
 ) * 1024 * 1024
+PRODUCTION_REPORT_TEMPLATE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "DKP_AYENA_Line_Hourly_Production_Report.xlsx",
+)
 
 
 @app.get("/")
@@ -351,29 +356,304 @@ def _xlsx_cell(reference, value="", style=0, *, number=False):
     )
 
 
-def _queue_xlsx(rows):
-    sheet_rows = [
-        '<row r="1"><c r="A1" t="inlineStr"><is><t>Date</t></is></c>'
-        '<c r="B1" t="inlineStr"><is><t>PO Number</t></is></c>'
-        '<c r="C1" t="inlineStr"><is><t>Barcode</t></is></c>'
-        '<c r="D1" t="inlineStr"><is><t>Quantity</t></is></c></row>'
-    ]
-    for row_number, item in enumerate(rows, 2):
-        sheet_rows.append(
-            f'<row r="{row_number}">'
-            f'<c r="A{row_number}" t="inlineStr"><is><t>{escape(str(item.get("work_date", "")))}</t></is></c>'
-            f'<c r="B{row_number}" t="inlineStr"><is><t>{escape(str(item.get("po_number", "")))}</t></is></c>'
-            f'<c r="C{row_number}" t="inlineStr"><is><t>{escape(str(item.get("part_code", "")))}</t></is></c>'
-            f'<c r="D{row_number}"><v>{int(item.get("quantity") or 0)}</v></c>'
-            "</row>"
+def _local_hour(value):
+    try:
+        timestamp = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(APP_TIMEZONE).hour
+
+
+def _hourly_production_rows(queue_rows, event_rows):
+    grouped = {}
+    event_totals = {}
+
+    def add_quantity(key, quantity, created_at):
+        row = grouped.setdefault(
+            key,
+            {
+                "po_number": key[0],
+                "plan_id": key[1],
+                "part_code": key[2],
+                "hours": [0] * 12,
+                "outside_hours": 0,
+                "unbucketed": 0,
+                "first_at": created_at or "",
+            },
         )
-    return _xlsx_file(
-        "Queue",
-        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"""
-        + "".join(sheet_rows)
-        + "</sheetData></worksheet>",
+        if created_at and (not row["first_at"] or created_at < row["first_at"]):
+            row["first_at"] = created_at
+        hour = _local_hour(created_at)
+        if hour is None:
+            row["unbucketed"] += quantity
+        elif 8 <= hour < 20:
+            row["hours"][hour - 8] += quantity
+        else:
+            row["outside_hours"] += quantity
+
+    completed_events = sorted(
+        (
+            event
+            for event in event_rows
+            if event.get("action") == "produced"
+            and event.get("status") in {"synced", "skipped", "error"}
+        ),
+        key=lambda event: str(event.get("created_at") or ""),
     )
+    for event in completed_events:
+        key = (
+            str(event.get("po_number") or ""),
+            str(event.get("plan_id") or "")
+            if event.get("status") == "synced"
+            else "",
+            str(event.get("part_code") or ""),
+        )
+        quantity = int(event.get("quantity") or 0)
+        event_totals[key] = event_totals.get(key, 0) + quantity
+        add_quantity(key, quantity, event.get("created_at"))
+
+    legacy_totals = {}
+    for item in queue_rows:
+        key = (
+            str(item.get("po_number") or ""),
+            str(item.get("planner_plan_id") or "")
+            if item.get("status") == "synced"
+            else "",
+            str(item.get("part_code") or ""),
+        )
+        legacy = legacy_totals.setdefault(
+            key,
+            {"quantity": 0, "created_at": str(item.get("created_at") or "")},
+        )
+        legacy["quantity"] += int(item.get("quantity") or 0)
+        created_at = str(item.get("created_at") or "")
+        if created_at and (
+            not legacy["created_at"] or created_at < legacy["created_at"]
+        ):
+            legacy["created_at"] = created_at
+
+    for key, legacy in legacy_totals.items():
+        missing = legacy["quantity"] - event_totals.get(key, 0)
+        if missing > 0:
+            add_quantity(key, missing, legacy["created_at"])
+
+    return sorted(
+        grouped.values(),
+        key=lambda row: (
+            row["first_at"],
+            row["po_number"],
+            row["plan_id"],
+            row["part_code"],
+        ),
+    )
+
+
+def _queue_xlsx(queue_rows, event_rows, work_date):
+    report_rows = _hourly_production_rows(queue_rows, event_rows)
+    reserved_rows = max(3, len(report_rows))
+    data_end = 8 + reserved_rows
+    grand_total_row = data_end + 1
+    signature_rows = (grand_total_row + 1, grand_total_row + 2, grand_total_row + 3)
+    column_totals = [0] * 12
+    extra_total = 0
+    rendered_rows = []
+
+    for index in range(reserved_rows):
+        row_number = 9 + index
+        if index >= len(report_rows):
+            rendered_rows.append(
+                f'<row r="{row_number}" spans="1:19" s="4" customFormat="1" '
+                'ht="18" customHeight="1">'
+                + "".join(
+                    _xlsx_cell(f"{column}{row_number}", "", 11)
+                    for column in "ABCDEFGHIJKLMNOPQRS"
+                )
+                + "</row>"
+            )
+            continue
+
+        item = report_rows[index]
+        hours = item["hours"]
+        outside_hours = item["outside_hours"]
+        unbucketed = item["unbucketed"]
+        for hour_index, quantity in enumerate(hours):
+            column_totals[hour_index] += quantity
+        extra_total += outside_hours + unbucketed
+        remarks = []
+        if outside_hours:
+            remarks.append(f"Outside 08:00-20:00: {outside_hours}")
+        if unbucketed:
+            remarks.append(f"Time unavailable: {unbucketed}")
+        row_total = sum(hours) + outside_hours + unbucketed
+        formula = f"SUM(F{row_number}:Q{row_number})"
+        if outside_hours + unbucketed:
+            formula += f"+{outside_hours + unbucketed}"
+        cells = [
+            _xlsx_cell(f"A{row_number}", index + 1, 11, number=True),
+            _xlsx_cell(f"B{row_number}", item["po_number"], 11),
+            _xlsx_cell(f"C{row_number}", item["plan_id"], 11),
+            _xlsx_cell(f"D{row_number}", item["part_code"], 11),
+            _xlsx_cell(f"E{row_number}", "", 11),
+        ]
+        cells.extend(
+            _xlsx_cell(f"{column}{row_number}", quantity, 11, number=True)
+            for column, quantity in zip("FGHIJKLMNOPQ", hours)
+        )
+        cells.extend(
+            (
+                f'<c r="R{row_number}" s="11"><f>{formula}</f>'
+                f"<v>{row_total}</v></c>",
+                _xlsx_cell(f"S{row_number}", "; ".join(remarks), 11),
+            )
+        )
+        rendered_rows.append(
+            f'<row r="{row_number}" spans="1:19" s="4" customFormat="1" '
+            'ht="18" customHeight="1">'
+            + "".join(cells)
+            + "</row>"
+        )
+
+    grand_cells = [
+        f'<c r="A{grand_total_row}" s="12" t="s"><v>32</v></c>',
+        *(
+            _xlsx_cell(f"{column}{grand_total_row}", "", 12)
+            for column in "BCDE"
+        ),
+    ]
+    grand_cells.extend(
+        (
+            f'<c r="{column}{grand_total_row}" s="13">'
+            f"<f>SUM({column}9:{column}{data_end})</f><v>{total}</v></c>"
+        )
+        for column, total in zip("FGHIJKLMNOPQ", column_totals)
+    )
+    grand_formula = f"SUM(F{grand_total_row}:Q{grand_total_row})"
+    if extra_total:
+        grand_formula += f"+{extra_total}"
+    grand_cells.extend(
+        (
+            f'<c r="R{grand_total_row}" s="13"><f>{grand_formula}</f>'
+            f"<v>{sum(column_totals) + extra_total}</v></c>",
+            _xlsx_cell(f"S{grand_total_row}", "", 13),
+        )
+    )
+    rendered_rows.append(
+        f'<row r="{grand_total_row}" spans="1:19" s="4" customFormat="1" '
+        'ht="15" customHeight="1">'
+        + "".join(grand_cells)
+        + "</row>"
+    )
+
+    with zipfile.ZipFile(PRODUCTION_REPORT_TEMPLATE) as template:
+        sheet = template.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        workbook = template.read("xl/workbook.xml").decode("utf-8")
+        before, remainder = sheet.split("<sheetData>", 1)
+        original_rows, after = remainder.split("</sheetData>", 1)
+        header_rows = original_rows.split('<row r="9"', 1)[0]
+        header_rows = header_rows.replace(
+            '<c r="B6" s="8"/>',
+            _xlsx_cell("B6", work_date, 8),
+        )
+
+        for source_row, target_row in zip((13, 14, 15), signature_rows):
+            row_xml = re.search(
+                rf'<row r="{source_row}".*?</row>',
+                original_rows,
+                re.DOTALL,
+            ).group(0)
+            row_xml = row_xml.replace(
+                f'<row r="{source_row}"',
+                f'<row r="{target_row}"',
+            )
+            row_xml = re.sub(
+                rf'r="([A-S]){source_row}"',
+                lambda match: f'r="{match.group(1)}{target_row}"',
+                row_xml,
+            )
+            rendered_rows.append(row_xml)
+
+        merge_refs = [
+            f"A{signature_rows[2]}:E{signature_rows[2]}",
+            f"A{signature_rows[0]}:E{signature_rows[0]}",
+            f"F{signature_rows[0]}:L{signature_rows[0]}",
+            f"M{signature_rows[0]}:R{signature_rows[0]}",
+            f"M{signature_rows[1]}:R{signature_rows[1]}",
+            f"M{signature_rows[2]}:R{signature_rows[2]}",
+            f"F{signature_rows[1]}:L{signature_rows[1]}",
+            f"F{signature_rows[2]}:L{signature_rows[2]}",
+            f"A{grand_total_row}:E{grand_total_row}",
+            f"A{signature_rows[1]}:E{signature_rows[1]}",
+            "A1:B4",
+            "C1:S2",
+            "C3:S3",
+            "B6:D6",
+            "F6:H6",
+            "J6:L6",
+            "N6:S6",
+        ]
+        merge_cells = (
+            f'<mergeCells count="{len(merge_refs)}">'
+            + "".join(f'<mergeCell ref="{reference}"/>' for reference in merge_refs)
+            + "</mergeCells>"
+        )
+        after = re.sub(
+            r'<mergeCells count="\d+">.*?</mergeCells>',
+            merge_cells,
+            after,
+            flags=re.DOTALL,
+        )
+        last_row = signature_rows[2]
+        before = re.sub(
+            r'<dimension ref="A1:S\d+"/>',
+            f'<dimension ref="A1:S{last_row}"/>',
+            before,
+        ).replace(
+            'activeCell="N12" sqref="N12"',
+            f'activeCell="N{grand_total_row}" sqref="N{grand_total_row}"',
+        )
+        sheet = (
+            before
+            + "<sheetData>"
+            + header_rows
+            + "".join(rendered_rows)
+            + "</sheetData>"
+            + after
+        )
+        workbook = re.sub(
+            r"('Hourly Production Report'!\$A\$1:\$S\$)\d+",
+            rf"\g<1>{max(20, last_row)}",
+            workbook,
+        )
+        formula_cells = [
+            *(f"R{9 + index}" for index in range(len(report_rows))),
+            *(f"{column}{grand_total_row}" for column in "FGHIJKLMNOPQR"),
+        ]
+        calc_chain = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<calcChain xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            + "".join(
+                '<c r="%s" i="1"%s/>'
+                % (reference, ' l="1"' if index == 0 else "")
+                for index, reference in enumerate(formula_cells)
+            )
+            + "</calcChain>"
+        )
+
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as generated:
+            for info in template.infolist():
+                content = template.read(info.filename)
+                if info.filename == "xl/worksheets/sheet1.xml":
+                    content = sheet.encode("utf-8")
+                elif info.filename == "xl/workbook.xml":
+                    content = workbook.encode("utf-8")
+                elif info.filename == "xl/calcChain.xml":
+                    content = calc_chain.encode("utf-8")
+                generated.writestr(info, content)
+    output.seek(0)
+    return output
 
 
 def _qc_xlsx(rows):
@@ -536,10 +816,11 @@ def _qc_xlsx(rows):
 def export_print_queue_xlsx():
     try:
         queue = list_printed_parts(request.args.get("date"))
+        events = list_production_events(queue["date"])
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     return send_file(
-        _queue_xlsx(queue["items"]),
+        _queue_xlsx(queue["items"], events["items"], queue["date"]),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
         download_name=f"print-queue-{queue['date']}.xlsx",
@@ -615,12 +896,27 @@ def add_print_queue_item():
         if not work_date:
             return jsonify(error="work_date is required."), 400
         try:
-            item = add_printed_part(
-                str(payload.get("part_code", "")),
-                payload.get("quantity", 1),
-                str(payload.get("po_number", "")),
-                work_date,
-            )
+            if str(payload.get("event_id", "")).strip():
+                event = stage_production_event(
+                    str(payload.get("event_id", "")),
+                    "produced",
+                    str(payload.get("po_number", "")),
+                    "",
+                    str(payload.get("part_code", "")),
+                    payload.get("quantity", 1),
+                    work_date,
+                )
+                item = skip_production_event(
+                    event["event_id"],
+                    "Planner sync is disabled.",
+                )
+            else:
+                item = add_printed_part(
+                    str(payload.get("part_code", "")),
+                    payload.get("quantity", 1),
+                    str(payload.get("po_number", "")),
+                    work_date,
+                )
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         return jsonify(item=item, sync=None), 201
