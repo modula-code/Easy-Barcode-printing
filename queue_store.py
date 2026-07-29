@@ -296,6 +296,61 @@ def fail_production_event(event_id: str, error: str) -> None:
         )
 
 
+def record_local_production_event(event_id: str, error: str) -> dict:
+    """Keep a produced barcode locally when Planner did not accept it."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _ensure_schema()
+    with _queue_lock, _connect() as connection:
+        event = connection.execute(
+            "SELECT * FROM production_events WHERE event_id = %s FOR UPDATE",
+            (event_id,),
+        ).fetchone()
+        if not event or event["action"] != "produced":
+            raise ValueError("Production event was not found.")
+        if event["status"] == "synced":
+            raise ValueError("That event is already synced with Planner.")
+
+        row = (
+            connection.execute(
+                "SELECT * FROM printed_parts WHERE id = %s",
+                (event["target_row_id"],),
+            ).fetchone()
+            if event["target_row_id"]
+            else None
+        )
+        if not row:
+            row = connection.execute(
+                """
+                INSERT INTO printed_parts
+                    (po_number, part_code, quantity, status, work_date, created_at)
+                VALUES (%s, %s, %s, 'error', %s, %s)
+                RETURNING *
+                """,
+                (
+                    event["po_number"],
+                    event["part_code"],
+                    event["quantity"],
+                    event["work_date"],
+                    now,
+                ),
+            ).fetchone()
+
+        connection.execute(
+            """
+            UPDATE production_events
+            SET target_row_id = %s, status = 'error', error = %s, updated_at = %s
+            WHERE event_id = %s
+            """,
+            (
+                row["id"],
+                str(error or "Planner sync failed.")[:1000],
+                now,
+                event_id,
+            ),
+        )
+    return dict(row)
+
+
 def skip_production_event(event_id: str, error: str) -> dict | None:
     """Keep fulfilled Planner production local without retrying or double-counting."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -409,6 +464,14 @@ def complete_production_event(event_id: str, planner_response: dict) -> dict | N
                 != int(event["quantity"])
             ):
                 raise ValueError("Planner response included invalid SO allocations.")
+            if event["status"] == "error" and event["target_row_id"]:
+                connection.execute(
+                    """
+                    DELETE FROM printed_parts
+                    WHERE id = %s AND status = 'error'
+                    """,
+                    (event["target_row_id"],),
+                )
             row_ids = []
             for so_number, quantity in normalized_allocations:
                 row = connection.execute(

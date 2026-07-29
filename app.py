@@ -49,6 +49,7 @@ from queue_store import (  # noqa: E402
     list_printed_parts,
     list_production_events,
     list_qc_records,
+    record_local_production_event,
     record_local_rejection,
     skip_production_event,
     stage_production_event,
@@ -641,16 +642,23 @@ def add_print_queue_item():
         return jsonify(item=item, sync=None, sync_status="skipped"), 201
     try:
         item, synced = _push_to_planner(event)
-    except PlannerSyncError as exc:
-        if _planner_quantity_fulfilled(exc):
+    except (PlannerSyncError, ValueError) as exc:
+        if isinstance(exc, PlannerSyncError) and _planner_quantity_fulfilled(exc):
             try:
                 item = skip_production_event(event["event_id"], str(exc))
             except ValueError as local_exc:
                 return jsonify(error=str(local_exc)), 500
             return jsonify(item=item, sync=None, sync_status="skipped"), 201
-        return jsonify(error=str(exc)), exc.status_code
-    except ValueError as exc:
-        return jsonify(error=str(exc)), 500
+        try:
+            item = record_local_production_event(event["event_id"], str(exc))
+        except ValueError as local_exc:
+            return jsonify(error=str(local_exc)), 500
+        return jsonify(
+            item=item,
+            sync=None,
+            sync_status="error",
+            warning=str(exc),
+        ), 201
     return jsonify(item=item, sync=synced), 201
 
 
