@@ -742,18 +742,26 @@ def lookup_part_codes(
         execute, _ = _connect()
 
     order = _find_purchase_order(
-        execute, normalized_po, ["id", "name", "partner_ref"]
+        execute,
+        normalized_po,
+        ["id", "name", "partner_ref", "date_approve", "date_order"],
     )
     print(f"[lookup] PO {order.get('name')} partner_ref={order.get('partner_ref')!r}")
+    # date_approve is empty on draft POs, so fall back to the order date.
+    po_date = order.get("date_approve") or order.get("date_order")
+
+    def with_po_date(result: dict[str, Any]) -> dict[str, Any]:
+        result["po_date"] = po_date
+        return result
 
     direct = _direct_purchase_line_match(execute, order, normalized_codes)
     if direct is not None:
-        return direct
+        return with_po_date(direct)
 
     # ponytail: BOM lookup remains only for legacy PO lines without SM fields.
     result = _match_codes(execute, order, normalized_po, normalized_codes)
     if result["matches"]:
-        return result
+        return with_po_date(result)
     # Retry only the codes Odoo could not resolve, so a code that did resolve
     # keeps its colour and still constrains the match.
     retry_codes = [
@@ -763,10 +771,10 @@ def lookup_part_codes(
         for item in result["results"]
     ]
     if retry_codes == normalized_codes:
-        return result
+        return with_po_date(result)
     print(f"[lookup] retrying without colour suffix: {retry_codes}")
     retry = _match_codes(execute, order, normalized_po, retry_codes)
-    return retry if retry["matches"] else result
+    return with_po_date(retry if retry["matches"] else result)
 
 
 def _match_codes(

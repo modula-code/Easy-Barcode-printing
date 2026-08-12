@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Drawing Changes</title>
+        <link
+            rel="stylesheet"
+            href="{{ url_for('static', filename='workflow.css') }}"
+        />
+        <style>
+            .eco-order + .eco-order {
+                border-top: 1px solid var(--line, #d8c8c1);
+            }
+
+            .eco-order {
+                padding: 14px 18px;
+            }
+
+            .eco-order-head {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: baseline;
+                gap: 10px 16px;
+                margin-bottom: 10px;
+            }
+
+            .eco-po {
+                font-size: 1.1rem;
+                font-weight: 800;
+            }
+
+            .eco-panels {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+
+            .eco-panel {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                padding: 8px 12px;
+                border-radius: 8px;
+                border-left: 5px solid #c2200a;
+                background: #fdf1ee;
+                min-width: 190px;
+            }
+
+            .eco-panel-code {
+                font-weight: 800;
+            }
+
+            .eco-panel-rev {
+                font-weight: 700;
+                color: #a01a08;
+            }
+
+            .eco-panel-date {
+                font-size: 0.85rem;
+                color: var(--muted, #6b4b41);
+            }
+
+            .filter-row .field {
+                width: 190px;
+            }
+        </style>
+    </head>
+    <body>
+        <header class="app-header">
+            <div class="header-inner">
+                <a class="brand" href="/">
+                    <img
+                        src="{{ url_for('static', filename='logo.svg') }}"
+                        alt="Modula SW Enterprise"
+                    />
+                    <span class="brand-label">Barcode control</span>
+                </a>
+                <nav class="nav" aria-label="Barcode workflow">
+                    <a href="/">Label printing</a>
+                    <a href="/queue">Queue</a>
+                    <a href="/qc">QC</a>
+                    <a href="/history">History</a>
+                    <a href="/changelog" aria-current="page">Drawing changes</a>
+                </nav>
+            </div>
+        </header>
+
+        <main class="workspace">
+            <section class="hero">
+                <div>
+                    <p class="eyebrow">Engineering audit</p>
+                    <h1>Drawing changes</h1>
+                    <p class="lede">
+                        Dongkwang purchase orders (locked) whose panels have a
+                        newer drawing in the ECO tracker than the day the order
+                        was approved.
+                    </p>
+                </div>
+                <div class="hero-actions">
+                    <a id="export-link" class="button secondary" href="#"
+                        >Export CSV</a
+                    >
+                    <button id="refresh" class="button" type="button">
+                        Refresh
+                    </button>
+                </div>
+            </section>
+
+            <p id="status" class="status" aria-live="polite"></p>
+
+            <div class="filter-row">
+                <label class="field">
+                    <span>Panel</span>
+                    <input id="panel-filter" type="search" placeholder="P0240-AC" />
+                </label>
+                <label class="field">
+                    <span>PO number</span>
+                    <input id="po-filter" type="search" placeholder="PO13814" />
+                </label>
+            </div>
+
+            <section class="metrics" aria-label="Audit summary">
+                <div class="metric">
+                    <span class="metric-label">Orders swept</span>
+                    <strong id="po-count" class="metric-value">—</strong>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Affected orders</span>
+                    <strong id="affected-count" class="metric-value">—</strong>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Affected lines</span>
+                    <strong id="line-count" class="metric-value">—</strong>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">Tracker items</span>
+                    <strong id="index-size" class="metric-value">—</strong>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel-header">
+                    <div>
+                        <h2 id="orders-title">Affected orders</h2>
+                        <p>Newest approval first. Each panel shows the revision to pull.</p>
+                    </div>
+                </div>
+                <div id="orders" class="panel-body flush" aria-live="polite"></div>
+            </section>
+        </main>
+
+        <script>
+            const panelFilter = document.querySelector("#panel-filter");
+            const poFilter = document.querySelector("#po-filter");
+            const ordersBox = document.querySelector("#orders");
+            const statusText = document.querySelector("#status");
+            const exportLink = document.querySelector("#export-link");
+            let loadedOrders = [];
+
+            function showStatus(message, isError = false) {
+                statusText.textContent = message;
+                statusText.className = `status${isError ? " error" : ""}`;
+            }
+
+            function emptyState(title, text) {
+                const empty = document.createElement("p");
+                empty.className = "empty";
+                const strong = document.createElement("strong");
+                strong.textContent = title;
+                empty.append(strong, document.createElement("br"), text);
+                return empty;
+            }
+
+            function renderOrders() {
+                const panelTerm = panelFilter.value.trim().toUpperCase();
+                const poTerm = poFilter.value.trim().toUpperCase();
+                const visible = loadedOrders
+                    .filter(
+                        (order) =>
+                            !poTerm || order.po_number.toUpperCase().includes(poTerm),
+                    )
+                    .map((order) => ({
+                        ...order,
+                        panels: panelTerm
+                            ? order.panels.filter((p) =>
+                                  p.panel.toUpperCase().includes(panelTerm),
+                              )
+                            : order.panels,
+                    }))
+                    .filter((order) => order.panels.length);
+
+                ordersBox.replaceChildren();
+                if (!visible.length) {
+                    ordersBox.appendChild(
+                        emptyState(
+                            "Nothing to show",
+                            panelTerm || poTerm
+                                ? "No order matches that filter."
+                                : "No panel on these orders has a newer drawing.",
+                        ),
+                    );
+                    return;
+                }
+
+                for (const order of visible) {
+                    const block = document.createElement("article");
+                    block.className = "eco-order";
+
+                    const head = document.createElement("div");
+                    head.className = "eco-order-head";
+                    const po = document.createElement("span");
+                    po.className = "eco-po";
+                    po.textContent = order.po_number;
+                    const meta = document.createElement("span");
+                    meta.className = "record-meta";
+                    meta.textContent = `approved ${order.po_approved}${order.partner_ref ? ` · ${order.partner_ref}` : ""}`;
+                    const pill = document.createElement("span");
+                    pill.className = "pill danger";
+                    pill.textContent = `${order.panels.length} panel${order.panels.length === 1 ? "" : "s"}`;
+                    head.append(po, meta, pill);
+                    block.appendChild(head);
+
+                    const list = document.createElement("div");
+                    list.className = "eco-panels";
+                    for (const panel of order.panels) {
+                        const item = document.createElement("div");
+                        item.className = "eco-panel";
+                        const code = document.createElement("span");
+                        code.className = "eco-panel-code";
+                        code.textContent = panel.panel;
+                        const rev = document.createElement("span");
+                        rev.className = "eco-panel-rev";
+                        rev.textContent = panel.drawing_code
+                            ? `${panel.revision} / ${panel.drawing_code}`
+                            : panel.revision;
+                        const when = document.createElement("span");
+                        when.className = "eco-panel-date";
+                        when.textContent = `released ${panel.released_on}`;
+                        item.append(code, rev, when);
+                        if (panel.description) {
+                            const note = document.createElement("span");
+                            note.className = "eco-panel-date";
+                            note.textContent = panel.description;
+                            item.appendChild(note);
+                        }
+                        list.appendChild(item);
+                    }
+                    block.appendChild(list);
+                    ordersBox.appendChild(block);
+                }
+            }
+
+            async function load() {
+                showStatus("Reading Odoo and the ECO tracker…");
+                ordersBox.replaceChildren();
+                exportLink.href = "/api/eco-audit.csv";
+                try {
+                    const response = await fetch("/api/eco-audit");
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || "Request failed.");
+                    if (data.enabled === false) {
+                        loadedOrders = [];
+                        renderOrders();
+                        showStatus(data.error, true);
+                        return;
+                    }
+
+                    loadedOrders = data.orders || [];
+                    document.querySelector("#po-count").textContent = data.po_count;
+                    document.querySelector("#affected-count").textContent =
+                        loadedOrders.length;
+                    document.querySelector("#line-count").textContent = (
+                        data.findings || []
+                    ).length;
+                    document.querySelector("#index-size").textContent = data.index_size;
+                    renderOrders();
+                    showStatus(
+                        `${data.po_count} orders checked against ${data.index_size} tracker items.`,
+                    );
+                } catch (error) {
+                    showStatus(error.message || "Could not load the audit.", true);
+                    ordersBox.appendChild(
+                        emptyState("Audit unavailable", "Try Refresh once Odoo responds."),
+                    );
+                }
+            }
+
+            document.querySelector("#refresh").addEventListener("click", load);
+            panelFilter.addEventListener("input", renderOrders);
+            poFilter.addEventListener("input", renderOrders);
+            load();
+        </script>
+    </body>
+</html>

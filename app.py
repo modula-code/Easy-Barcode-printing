@@ -1,3 +1,4 @@
+import csv
 import io
 import json
 import os
@@ -22,6 +23,9 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 load_dotenv()
 
+import eco_audit  # noqa: E402
+from eco_tracker import EcoTrackerError, check_codes  # noqa: E402
+from eco_tracker import is_enabled as eco_tracker_enabled  # noqa: E402
 from odoo_client import (  # noqa: E402
     OdooConfigurationError,
     OdooLookupError,
@@ -61,6 +65,7 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = int(
     os.getenv("MAX_UPLOAD_SIZE_MB", "20")
 ) * 1024 * 1024
+ECO_AUDIT_STATES = {"draft", "sent", "to approve", "purchase", "done", "cancel"}
 PRODUCTION_REPORT_TEMPLATE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "DKP_AYENA_Line_Hourly_Production_Report.xlsx",
@@ -87,9 +92,75 @@ def qc_page():
     return render_template("qc.html", qc_dispositions=QC_DISPOSITIONS)
 
 
+@app.get("/changelog")
+def changelog_page():
+    return render_template("changelog.html")
+
+
 @app.get("/healthz")
 def health():
     return jsonify(status="ok")
+
+
+def _eco_audit_report():
+    """Shared by the JSON and CSV endpoints. Raises on bad input or an Odoo failure."""
+    vendor_id = int(request.args.get("vendor") or eco_audit.DEFAULT_VENDOR_ID)
+    state = str(request.args.get("state", "done")).strip() or "done"
+    if state not in ECO_AUDIT_STATES:
+        raise ValueError(
+            f"State must be one of: {', '.join(sorted(ECO_AUDIT_STATES))}."
+        )
+    return eco_audit.audit(vendor_id, state)
+
+
+@app.get("/api/eco-audit")
+def eco_audit_json():
+    if not eco_tracker_enabled():
+        return jsonify(
+            enabled=False,
+            error="The revision check is switched off (ECO_REVISION_CHECK_ENABLED).",
+        ), 200
+
+    try:
+        report = _eco_audit_report()
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    except EcoTrackerError as exc:
+        return jsonify(error=str(exc)), 502
+    except OdooConfigurationError as exc:
+        return jsonify(error=str(exc)), 500
+    except (xmlrpc.client.Error, OSError, TimeoutError) as exc:
+        app.logger.exception("Odoo request failed during the ECO audit")
+        return jsonify(error=f"Could not query Odoo: {exc}"), 502
+
+    report["enabled"] = True
+    return jsonify(report)
+
+
+@app.get("/api/eco-audit.csv")
+def eco_audit_csv():
+    try:
+        report = _eco_audit_report()
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    except EcoTrackerError as exc:
+        return jsonify(error=str(exc)), 502
+
+    columns = [
+        "po_number", "po_approved", "partner_ref", "panel",
+        "revision", "drawing_code", "released_on", "description",
+    ]
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns)
+    writer.writeheader()
+    writer.writerows(report["findings"])
+    return send_file(
+        io.BytesIO(buffer.getvalue().encode("utf-8-sig")),
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=f"drawing-changes-{report['state']}-{date.today().isoformat()}.csv",
+        max_age=0,
+    )
 
 
 @app.get("/api/partner-ref")
@@ -215,6 +286,19 @@ def lookup():
     except Exception:
         app.logger.exception("Unexpected lookup failure")
         return jsonify(error="The lookup failed unexpectedly."), 500
+
+    # A tracker outage must never stop the floor printing, so this failure is a
+    # banner, not an error response.
+    try:
+        result["revision_alerts"] = check_codes(
+            [str(match.get("part_code") or "") for match in result["matches"]]
+            + sm_codes,
+            result.get("po_date"),
+        )
+    except EcoTrackerError as exc:
+        app.logger.warning("ECO revision check unavailable: %s", exc)
+        result["revision_alerts"] = []
+        result["revision_check_error"] = str(exc)
 
     if document_bytes is not None and result["matches"]:
         try:
@@ -459,10 +543,140 @@ def _hourly_production_rows(queue_rows, event_rows):
         ),
     )
 
+def _queue_pdf(queue_rows, event_rows, work_date):
+    import io
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    
+    report_rows = _hourly_production_rows(queue_rows, event_rows)
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=10*mm,
+        leftMargin=10*mm,
+        topMargin=15*mm,
+        bottomMargin=15*mm
+    )
+    
+    elements = []
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Heading1'],
+        alignment=1,
+        fontSize=16,
+        spaceAfter=5
+    )
+    subtitle_style = ParagraphStyle(
+        'SubtitleStyle',
+        parent=styles['Normal'],
+        alignment=1,
+        fontSize=12,
+        spaceAfter=15
+    )
+    
+    elements.append(Paragraph("AYENA LINE DAILY PRODUCTION REPORT", title_style))
+    elements.append(Paragraph("DKP | Hourly Production Tracking Sheet", subtitle_style))
+    
+    header_data = [
+        [f"Date: {work_date}", "Shift: _____________", "Line: _____________", "Supervisor: _____________"]
+    ]
+    header_table = Table(header_data, colWidths=[60*mm, 60*mm, 60*mm, 60*mm])
+    header_table.setStyle(TableStyle([
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+    ]))
+    elements.append(header_table)
+    elements.append(Spacer(1, 5*mm))
+    
+    col_widths = [12*mm, 35*mm, 30*mm, 30*mm, 20*mm] + [12*mm]*12 + [15*mm, 25*mm]
+    table_data = [
+        [
+            "Sr No", "PO Number", "Plan ID", "Part Code", "Man-power",
+            "08:00\n09:00", "09:00\n10:00", "10:00\n11:00", "11:00\n12:00",
+            "12:00\n13:00", "13:00\n14:00", "14:00\n15:00", "15:00\n16:00",
+            "16:00\n17:00", "17:00\n18:00", "18:00\n19:00", "19:00\n20:00",
+            "Total\nProduced", "Remarks"
+        ]
+    ]
+    
+    reserved_rows = max(15, len(report_rows))
+    column_totals = [0] * 12
+    extra_total = 0
+    
+    for i in range(reserved_rows):
+        if i < len(report_rows):
+            item = report_rows[i]
+            row_total = sum(item["hours"]) + item["outside_hours"] + item["unbucketed"]
+            for h in range(12):
+                column_totals[h] += item["hours"][h]
+            extra_total += item["outside_hours"] + item["unbucketed"]
+            
+            row = [
+                str(i + 1),
+                item["po_number"],
+                item["plan_id"],
+                item["part_code"],
+                ""
+            ]
+            row.extend(str(h) for h in item["hours"])
+            row.append(str(row_total))
+            
+            remarks = []
+            if item["outside_hours"]: remarks.append(f"Outside: {item['outside_hours']}")
+            if item["unbucketed"]: remarks.append(f"Unbucketed: {item['unbucketed']}")
+            row.append("; ".join(remarks))
+        else:
+            row = [str(i + 1), "", "", "", ""] + [""]*12 + ["", ""]
+        table_data.append(row)
+        
+    grand_total_row = ["GRAND TOTAL", "", "", "", ""]
+    grand_total_row.extend(str(t) for t in column_totals)
+    grand_total_row.append(str(sum(column_totals) + extra_total))
+    grand_total_row.append("")
+    table_data.append(grand_total_row)
+    
+    t = Table(table_data, colWidths=col_widths, rowHeights=[10*mm] + [8.5*mm]*reserved_rows + [8.5*mm])
+    t.setStyle(TableStyle([
+        ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 8),
+        ('FONTSIZE', (0,1), (-1,-1), 9),
+        ('SPAN', (0,-1), (4,-1)),
+        ('ALIGN', (0,-1), (0,-1), 'RIGHT'),
+        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+    ]))
+    elements.append(t)
+    
+    elements.append(Spacer(1, 15*mm))
+    
+    sig_data = [
+        ["Signature - Production Supervisor", "Signature - Shift In-charge", "Signature - Quality / QA"],
+        ["Date: __________________", "Date: __________________", "Date: __________________"]
+    ]
+    sig_table = Table(sig_data, colWidths=[90*mm, 90*mm, 90*mm])
+    sig_table.setStyle(TableStyle([
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
+        ('TOPPADDING', (0,1), (-1,1), 10),
+    ]))
+    elements.append(sig_table)
+    
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
 
 def _queue_xlsx(queue_rows, event_rows, work_date):
     report_rows = _hourly_production_rows(queue_rows, event_rows)
-    reserved_rows = max(3, len(report_rows))
+    reserved_rows = max(15, len(report_rows))
     data_end = 8 + reserved_rows
     grand_total_row = data_end + 1
     signature_rows = (grand_total_row + 1, grand_total_row + 2, grand_total_row + 3)
@@ -475,7 +689,7 @@ def _queue_xlsx(queue_rows, event_rows, work_date):
         if index >= len(report_rows):
             rendered_rows.append(
                 f'<row r="{row_number}" spans="1:19" s="4" customFormat="1" '
-                'ht="18" customHeight="1">'
+                'ht="25" customHeight="1">'
                 + "".join(
                     _xlsx_cell(f"{column}{row_number}", "", 11)
                     for column in "ABCDEFGHIJKLMNOPQRS"
@@ -520,7 +734,7 @@ def _queue_xlsx(queue_rows, event_rows, work_date):
         )
         rendered_rows.append(
             f'<row r="{row_number}" spans="1:19" s="4" customFormat="1" '
-            'ht="18" customHeight="1">'
+            'ht="25" customHeight="1">'
             + "".join(cells)
             + "</row>"
         )
@@ -635,6 +849,10 @@ def _queue_xlsx(queue_rows, event_rows, work_date):
             r"('Hourly Production Report'!\$A\$1:\$S\$)\d+",
             rf"\g<1>{max(20, last_row)}",
             workbook,
+        )
+        workbook = workbook.replace(
+            '<definedNames>',
+            '<definedNames><definedName name="_xlnm.Print_Titles" localSheetId="0">\'Hourly Production Report\'!$A:$E</definedName>',
         )
         formula_cells = [
             *(f"R{9 + index}" for index in range(len(report_rows))),
@@ -834,6 +1052,21 @@ def export_print_queue_xlsx():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
         download_name=f"print-queue-{queue['date']}.xlsx",
+        max_age=0,
+    )
+
+@app.get("/api/print-queue/export.pdf")
+def export_print_queue_pdf():
+    try:
+        queue = list_printed_parts(request.args.get("date"))
+        events = list_production_events(queue["date"])
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return send_file(
+        _queue_pdf(queue["items"], events["items"], queue["date"]),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"print-queue-{queue['date']}.pdf",
         max_age=0,
     )
 

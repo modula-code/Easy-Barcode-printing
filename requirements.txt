@@ -4,3 +4,5 @@ python-dotenv
 pypdf
 reportlab
 psycopg[binary]
+google-auth
+google-api-python-client

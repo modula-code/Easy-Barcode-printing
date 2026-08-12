@@ -1,4 +1,8 @@
 .env
+# Google service account keys. The name is chosen by Google Cloud
+# (<project>-<keyid>.json), so match that shape as well as the obvious names.
+*service-account*.json
+*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].json
 .DS_Store
 __pycache__/
 *.py[cod]
@@ -17,3 +21,10 @@ test_queue.py
 test_queue_pg.py
 test_lookup_behavior.py
 SHOP_FLOOR_TRAINING.md
+test_hourly_export.py
+test_lookup_behavior.py
+test_qc_export.py
+test_qc_workflow.py
+test_queue_pg.py
+test_sm_codes.py
+test_lookup_behavior.py

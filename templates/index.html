@@ -296,6 +296,40 @@
                 line-height: 1.45;
             }
 
+            /* Read at arm's length on a glare-lit shop floor: solid saturated block,
+               white text, no reliance on the muted page palette. */
+            .revision-alert {
+                margin: 0;
+                padding: 16px 18px;
+                background: #c2200a;
+                border-top: 6px solid #ffd400;
+                color: #fff;
+                font-size: 1.15rem;
+                font-weight: 600;
+                line-height: 1.45;
+            }
+
+            .revision-alert strong {
+                display: block;
+                margin-bottom: 6px;
+                font-size: 1.45rem;
+                font-weight: 850;
+                letter-spacing: 0.02em;
+                text-transform: uppercase;
+            }
+
+            .revision-alert .revision-target {
+                display: inline-block;
+                margin-top: 10px;
+                padding: 8px 14px;
+                border-radius: 6px;
+                background: #ffd400;
+                color: #4a1400;
+                font-size: 1.3rem;
+                font-weight: 850;
+                letter-spacing: 0.03em;
+            }
+
             .document-status {
                 padding: 12px 15px;
                 border-top: 1px solid var(--success-line);
@@ -424,6 +458,13 @@
                             target="_blank"
                             rel="noopener"
                             >History</a
+                        >
+                        <a
+                            class="top-link"
+                            href="{{ url_for('changelog_page') }}"
+                            target="_blank"
+                            rel="noopener"
+                            >Drawing changes</a
                         >
                     </nav>
                 </header>
@@ -555,6 +596,54 @@
             let poSuggestionTimer = 0;
             let poSuggestionController = null;
             let resolvedPoNumber = "";
+            let revisionAlerts = new Map();
+
+            // Mirrors eco_tracker.normalize_item_code: SM-C303-R02 -> SM-C303,
+            // and the letter-O typo PO234-AA -> P0234-AA.
+            function normalizeItemCode(value) {
+                const code = String(value || "").trim().toUpperCase();
+                if (!code) return "";
+                return code
+                    .replace(/[-_]R\d+$/, "")
+                    .replace(/^PO(\d{3}-[A-Z]{2})$/, "P0$1");
+            }
+
+            function revisionAlertFor(match) {
+                const codes = [match.part_code, ...(match.sm_codes || [])];
+                for (const code of codes) {
+                    const alert = revisionAlerts.get(normalizeItemCode(code));
+                    if (alert) return alert;
+                }
+                return null;
+            }
+
+            function revisionDrawing(alert) {
+                return alert.drawing_code
+                    ? `${alert.revision} / ${alert.drawing_code}`
+                    : alert.revision;
+            }
+
+            function revisionAlertText(alert) {
+                let text =
+                    `${alert.code} has a new revision released ${alert.released_on} ` +
+                    `(PO approved ${alert.po_date}). Kindly find data in ${revisionDrawing(alert)}.`;
+                if (alert.description) text += ` Change: ${alert.description}.`;
+                return text;
+            }
+
+            function revisionAlertNode(alert) {
+                const notice = document.createElement("p");
+                notice.className = "revision-alert";
+                const title = document.createElement("strong");
+                title.textContent = `⚠ ${alert.code} — new revision`;
+                let body = `Drawing released ${alert.released_on}, after this PO was approved ${alert.po_date}.`;
+                if (alert.description) body += ` Change: ${alert.description}.`;
+                const target = document.createElement("span");
+                target.className = "revision-target";
+                target.textContent = `Find data in ${revisionDrawing(alert)}`;
+                notice.append(title, body, document.createElement("br"), target);
+                return notice;
+            }
 
             function unlockFetchedLabel(text) {
                 fetchedLabelFile = null;
@@ -847,6 +936,15 @@
                 link.textContent = text;
                 link.addEventListener("click", async (event) => {
                     event.preventDefault();
+                    const alert = revisionAlertFor(match);
+                    if (
+                        alert &&
+                        !window.confirm(
+                            `${revisionAlertText(alert)}\n\nPrint this label anyway?`,
+                        )
+                    ) {
+                        return;
+                    }
                     if (!workDateInput.reportValidity()) return;
                     const eventKey = `production-event:${workDateInput.value}:${resolvedPoNumber}:${match.part_code}:${quantity}`;
                     const eventId = sessionStorage.getItem(eventKey) || newEventId();
@@ -892,6 +990,17 @@
                 results.replaceChildren();
                 let renderedAny = false;
 
+                revisionAlerts = new Map(
+                    (data.revision_alerts || []).map((alert) => [
+                        normalizeItemCode(alert.code),
+                        alert,
+                    ]),
+                );
+                if (data.revision_check_error) {
+                    showMessage(data.revision_check_error, true);
+                }
+                const shownAlerts = new Set();
+
                 for (const match of data.matches || []) {
                     const card = document.createElement("article");
                     card.className = "result-card";
@@ -914,6 +1023,12 @@
                     metadata.textContent = match.product_template_name;
                     row.appendChild(metadata);
                     card.appendChild(row);
+
+                    const alert = revisionAlertFor(match);
+                    if (alert) {
+                        shownAlerts.add(normalizeItemCode(alert.code));
+                        card.appendChild(revisionAlertNode(alert));
+                    }
 
                     const documentStatus = document.createElement("div");
                     documentStatus.className = "document-status";
@@ -951,6 +1066,23 @@
                     }
                     card.appendChild(documentStatus);
 
+                    results.appendChild(card);
+                    renderedAny = true;
+                }
+
+                // A scanned SM code can be in the tracker even when it resolved to no
+                // panel, so surface those alerts too.
+                for (const [key, alert] of revisionAlerts) {
+                    if (shownAlerts.has(key)) continue;
+                    const card = document.createElement("article");
+                    card.className = "result-card";
+                    const heading = document.createElement("header");
+                    heading.className = "result-heading";
+                    const headingCode = document.createElement("strong");
+                    headingCode.textContent = alert.code;
+                    heading.appendChild(headingCode);
+                    card.appendChild(heading);
+                    card.appendChild(revisionAlertNode(alert));
                     results.appendChild(card);
                     renderedAny = true;
                 }
