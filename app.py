@@ -1040,33 +1040,55 @@ def _qc_xlsx(rows):
     return _xlsx_file("QC Report", sheet_xml, styles_xml)
 
 
+def _export_rows():
+    """Queue + event rows for ?date=, or merged across ?from=&to= (inclusive).
+
+    Range exports sum each part's hourly buckets across every day."""
+    start, end = request.args.get("from"), request.args.get("to")
+    if not (start and end):
+        queue = list_printed_parts(request.args.get("date"))
+        events = list_production_events(queue["date"])
+        return queue["items"], events["items"], queue["date"], queue["date"]
+    try:
+        start, end = sorted(
+            (date.fromisoformat(start).isoformat(), date.fromisoformat(end).isoformat())
+        )
+    except ValueError as exc:
+        raise ValueError("from/to must use YYYY-MM-DD.") from exc
+    queue_rows, event_rows = [], []
+    for work_date in sorted(d for d in list_history_dates() if start <= d <= end):
+        queue_rows += list_printed_parts(work_date)["items"]
+        event_rows += list_production_events(work_date)["items"]
+    if start == end:
+        return queue_rows, event_rows, start, start
+    return queue_rows, event_rows, f"{start} to {end}", f"{start}_to_{end}"
+
+
 @app.get("/api/print-queue/export.xlsx")
 def export_print_queue_xlsx():
     try:
-        queue = list_printed_parts(request.args.get("date"))
-        events = list_production_events(queue["date"])
+        queue_rows, event_rows, label, slug = _export_rows()
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     return send_file(
-        _queue_xlsx(queue["items"], events["items"], queue["date"]),
+        _queue_xlsx(queue_rows, event_rows, label),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
-        download_name=f"print-queue-{queue['date']}.xlsx",
+        download_name=f"print-queue-{slug}.xlsx",
         max_age=0,
     )
 
 @app.get("/api/print-queue/export.pdf")
 def export_print_queue_pdf():
     try:
-        queue = list_printed_parts(request.args.get("date"))
-        events = list_production_events(queue["date"])
+        queue_rows, event_rows, label, slug = _export_rows()
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     return send_file(
-        _queue_pdf(queue["items"], events["items"], queue["date"]),
+        _queue_pdf(queue_rows, event_rows, label),
         mimetype="application/pdf",
         as_attachment=True,
-        download_name=f"print-queue-{queue['date']}.pdf",
+        download_name=f"print-queue-{slug}.pdf",
         max_age=0,
     )
 

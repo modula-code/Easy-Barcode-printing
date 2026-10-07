@@ -39,9 +39,20 @@
                         quantity left for any work date.
                     </p>
                 </div>
-                <div class="hero-actions">
+                <div class="hero-actions" style="align-items: end">
+                    <label class="field">
+                        <span>From</span>
+                        <input id="export-from" type="date" />
+                    </label>
+                    <label class="field">
+                        <span>To</span>
+                        <input id="export-to" type="date" />
+                    </label>
                     <a id="export-link" class="button secondary" href="#"
-                        >Export selected date</a
+                        >Export Excel</a
+                    >
+                    <a id="export-pdf-link" class="button secondary" href="#"
+                        >Export PDF</a
                     >
                 </div>
             </section>
@@ -333,8 +344,9 @@
                 dateInput.max = queue.today;
                 document.querySelector("#activity-title").textContent =
                     `Activity · ${formatDate(date)}`;
-                document.querySelector("#export-link").href =
-                    `/api/print-queue/export.xlsx?date=${encodeURIComponent(date)}`;
+                exportFrom.value = exportTo.value = date;
+                exportFrom.max = exportTo.max = queue.today;
+                updateExportLinks();
 
                 const synced = ledger.items.filter((item) => item.status === "synced");
                 document.querySelector("#produced-total").textContent = synced
@@ -365,6 +377,21 @@
             }
 
             dateInput.addEventListener("change", () => selectDate(dateInput.value));
+
+            const exportFrom = document.querySelector("#export-from");
+            const exportTo = document.querySelector("#export-to");
+            function updateExportLinks() {
+                const query = new URLSearchParams({
+                    from: exportFrom.value,
+                    to: exportTo.value || exportFrom.value,
+                });
+                document.querySelector("#export-link").href =
+                    `/api/print-queue/export.xlsx?${query}`;
+                document.querySelector("#export-pdf-link").href =
+                    `/api/print-queue/export.pdf?${query}`;
+            }
+            exportFrom.addEventListener("change", updateExportLinks);
+            exportTo.addEventListener("change", updateExportLinks);
 
             async function start() {
                 const historyData = await requestJson("/api/history");
