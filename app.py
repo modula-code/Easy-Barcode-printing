@@ -51,6 +51,7 @@ from queue_store import (  # noqa: E402
     get_printed_part,
     get_production_event,
     list_history_dates,
+    list_pending_production_events,
     list_printed_parts,
     list_production_events,
     list_qc_records,
@@ -1277,6 +1278,13 @@ def production_events():
         and os.getenv("BARCODE_SYNC_TOKEN", "").strip()
     )
     return jsonify(ledger)
+
+
+@app.get("/api/production-events/pending")
+def pending_production_events():
+    """All unsynced events across every day. The browser retries them one at a
+    time so a big backlog never floods Planner or outlives a request timeout."""
+    return jsonify(items=list_pending_production_events())
 
 
 @app.post("/api/production-events/<event_id>/retry")

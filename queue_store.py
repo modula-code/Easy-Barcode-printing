@@ -788,6 +788,22 @@ def get_production_event(event_id: str) -> dict:
     return dict(row)
 
 
+def list_pending_production_events() -> list[dict]:
+    """Every event Planner has not accepted, across all work dates, oldest
+    first so a production lands before the QC rejection that reverses it."""
+    _ensure_schema()
+    with _queue_lock, _connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT event_id, action, part_code, quantity, work_date
+            FROM production_events
+            WHERE status NOT IN ('synced', 'skipped')
+            ORDER BY created_at, event_id
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def list_production_events(work_date: str | None = None) -> dict:
     """Planner sync ledger: what was sent, what Planner answered, what failed.
 
