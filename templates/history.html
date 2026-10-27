@@ -93,6 +93,9 @@
                                 <h2 id="activity-title">Activity</h2>
                                 <p>Immutable production and QC sync events.</p>
                             </div>
+                            <button id="retry-day-button" type="button" class="secondary" hidden>
+                                Retry sync · this day
+                            </button>
                         </div>
                         <div id="timeline" class="timeline" aria-live="polite"></div>
                     </section>
@@ -351,6 +354,9 @@
                 exportFrom.max = exportTo.max = queue.today;
                 updateExportLinks();
 
+                retryDayButton.hidden = !ledger.items.some(
+                    (item) => item.status !== "synced" && item.status !== "skipped",
+                );
                 const synced = ledger.items.filter((item) => item.status === "synced");
                 document.querySelector("#produced-total").textContent = synced
                     .filter((item) => item.action === "produced")
@@ -400,14 +406,23 @@
             // Planner starts sending Retry-After.
             const RETRY_ALL_PAUSE_MS = 1000;
             const retryAllButton = document.querySelector("#retry-all-button");
-            retryAllButton.addEventListener("click", async () => {
-                retryAllButton.disabled = true;
+            const retryDayButton = document.querySelector("#retry-day-button");
+
+            // workDate = "" retries every day; otherwise only that day's events.
+            async function retryPending(workDate = "") {
+                retryAllButton.disabled = retryDayButton.disabled = true;
                 let sent = 0;
                 let failed = 0;
-                let message = "Nothing to retry. Every day is synced.";
+                let message = workDate
+                    ? `Nothing to retry. ${formatDate(workDate)} is synced.`
+                    : "Nothing to retry. Every day is synced.";
                 let isError = false;
                 try {
-                    const { items } = await requestJson("/api/production-events/pending");
+                    // ponytail: filters the all-days backlog client side; add a
+                    // ?date= filter to the endpoint if that list gets large.
+                    const items = (
+                        await requestJson("/api/production-events/pending")
+                    ).items.filter((item) => !workDate || item.work_date === workDate);
                     for (const [index, item] of items.entries()) {
                         showStatus(
                             `Retrying ${index + 1} of ${items.length} · ` +
@@ -450,8 +465,13 @@
                 // loadDate clears the status line, so report after it.
                 await loadDate(dateInput.value).catch(() => {});
                 showStatus(message, isError);
-                retryAllButton.disabled = false;
-            });
+                retryAllButton.disabled = retryDayButton.disabled = false;
+            }
+
+            retryAllButton.addEventListener("click", () => retryPending());
+            retryDayButton.addEventListener("click", () =>
+                retryPending(dateInput.value),
+            );
 
             async function start() {
                 const historyData = await requestJson("/api/history");
