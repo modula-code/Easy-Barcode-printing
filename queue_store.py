@@ -124,11 +124,11 @@ def _part_qty(part_code: str, quantity: int) -> tuple[str, int]:
     code = str(part_code or "").strip().upper()
     try:
         qty = int(quantity)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         qty = 0
     if not code:
         raise ValueError("part_code is required.")
-    if qty < 1 or qty > 500:
+    if isinstance(quantity, bool) or str(quantity).strip() != str(qty) or qty < 1 or qty > 500:
         raise ValueError("quantity must be between 1 and 500.")
     return code, qty
 

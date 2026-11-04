@@ -349,7 +349,19 @@
                 background: var(--primary);
                 color: #fff;
                 text-decoration: none;
+                border: 0;
+                cursor: pointer;
+                font: inherit;
                 font-weight: 750;
+            }
+
+            .label-count {
+                margin-top: 12px;
+            }
+
+            .label-count input {
+                max-width: 160px;
+                margin-top: 6px;
             }
 
             .print-link:hover {
@@ -916,6 +928,7 @@
                         part_code: match.part_code,
                         quantity,
                         work_date: workDateInput.value,
+                        label_token: match.document_match?.all_token,
                     }),
                 });
                 const data = await response.json();
@@ -925,17 +938,29 @@
                 return data;
             }
 
-            function queuedPrintLink(match, href, quantity, text, secondary = false) {
-                const link = document.createElement("a");
+            // quantitySource: fixed number, or an <input> whose value picks how many
+            // of the PDF's label pages to print (server caps it at the page count).
+            function queuedPrintLink(match, href, quantitySource, text, secondary = false) {
+                const fixed = typeof quantitySource === "number";
+                const link = document.createElement(fixed ? "a" : "button");
                 link.className = secondary
                     ? "print-link secondary-print-link"
                     : "print-link";
-                link.href = href;
-                link.target = "_blank";
-                link.rel = "noopener";
+                if (fixed) {
+                    link.href = href;
+                    link.target = "_blank";
+                    link.rel = "noopener";
+                } else {
+                    link.type = "button";
+                }
                 link.textContent = text;
+                let pending = false;
                 link.addEventListener("click", async (event) => {
                     event.preventDefault();
+                    if (pending) return;
+                    if (!fixed && !quantitySource.reportValidity()) return;
+                    const quantity = fixed ? quantitySource : quantitySource.valueAsNumber;
+                    const printHref = fixed ? href : `${href}?count=${quantity}`;
                     const alert = revisionAlertFor(match);
                     if (
                         alert &&
@@ -948,6 +973,8 @@
                     if (!workDateInput.reportValidity()) return;
                     const eventKey = `production-event:${workDateInput.value}:${resolvedPoNumber}:${match.part_code}:${quantity}`;
                     const eventId = sessionStorage.getItem(eventKey) || newEventId();
+                    pending = true;
+                    link.setAttribute("aria-disabled", "true");
                     const printWindow = window.open("about:blank", "_blank");
                     if (printWindow) {
                         printWindow.opener = null;
@@ -964,12 +991,13 @@
                                 ? `Synced ${match.part_code} x ${quantity}${associated ? `; associated ${associated}` : ""}.`
                                 : data.sync_status === "skipped"
                                   ? `Recorded ${match.part_code} x ${quantity} locally; Planner quantity is already fulfilled.`
-                                  : `Recorded ${match.part_code} x ${quantity} in the local queue.`,
+                                  : `Recorded ${match.part_code} x ${quantity} in the local queue.${data.warning ? ` Planner sync failed: ${data.warning}` : ""}`,
+                            data.sync_status === "error",
                         );
                         if (printWindow) {
-                            printWindow.location = href;
+                            printWindow.location = printHref;
                         } else {
-                            window.open(href, "_blank", "noopener");
+                            window.open(printHref, "_blank", "noopener");
                         }
                     } catch (error) {
                         if (printWindow) {
@@ -979,6 +1007,9 @@
                             error.message || "Could not record the print.",
                             true,
                         );
+                    } finally {
+                        pending = false;
+                        link.removeAttribute("aria-disabled");
                     }
                 });
                 return link;
@@ -1051,15 +1082,24 @@
                         );
                         documentStatus.append(printLink);
 
-                        if (match.document_match.matching_page_count > 1) {
-                            const printAllLink = queuedPrintLink(
+                        const labelCount = match.document_match.matching_page_count;
+                        if (labelCount > 1) {
+                            const quantityLabel = document.createElement("label");
+                            quantityLabel.className = "label-count";
+                            quantityLabel.textContent = `Labels to print at once (1–${labelCount})`;
+                            const quantityInput = document.createElement("input");
+                            Object.assign(quantityInput, {
+                                type: "number", min: 1, max: labelCount, step: 1,
+                                required: true, value: labelCount,
+                            });
+                            quantityLabel.appendChild(quantityInput);
+                            documentStatus.append(quantityLabel, queuedPrintLink(
                                 match,
                                 match.document_match.all_print_url,
-                                match.document_match.matching_page_count,
-                                `Print and record all quantity (${match.document_match.matching_page_count})`,
+                                quantityInput,
+                                "Print and record quantity",
                                 true,
-                            );
-                            documentStatus.append(printAllLink);
+                            ));
                         }
                     } else {
                         documentStatus.textContent = `Part code ${match.part_code} was not found in the uploaded PDF.`;

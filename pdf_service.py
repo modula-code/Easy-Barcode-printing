@@ -15,6 +15,7 @@ class PDFSearchError(RuntimeError):
 @dataclass(frozen=True)
 class PrintArtifact:
     pdf_bytes: bytes
+    page_count: int = 1
 
 
 class _PrintArtifactCache:
@@ -75,7 +76,19 @@ def _create_artifact(
     reader: PdfReader,
     page_indexes: list[int],
 ) -> PrintArtifact:
-    return PrintArtifact(pdf_bytes=_selected_pages_pdf(reader, page_indexes))
+    return PrintArtifact(
+        pdf_bytes=_selected_pages_pdf(reader, page_indexes),
+        page_count=len(page_indexes),
+    )
+
+
+def first_pages_pdf(artifact: PrintArtifact, count: int) -> bytes:
+    if not 1 <= count <= artifact.page_count:
+        raise ValueError(f"count must be between 1 and {artifact.page_count}.")
+    if count == artifact.page_count:
+        return artifact.pdf_bytes
+    reader = PdfReader(io.BytesIO(artifact.pdf_bytes))
+    return _selected_pages_pdf(reader, list(range(count)))
 
 
 def prepare_matching_pages(

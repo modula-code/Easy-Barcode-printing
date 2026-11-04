@@ -76,6 +76,12 @@ memory. The supplied configuration uses one worker and four threads.
 
 ## Print queue
 
+When a part's label appears on more than one page of the uploaded PDF, its result
+card shows **Labels to print at once (1–N)**, where N is the number of matching
+label pages. **Print and record quantity** prints the first chosen pages in one PDF
+and records that quantity. The server rejects a quantity above N, both for the print
+and for the recorded event.
+
 Today's PO label PDFs and printed barcodes are stored in Postgres at
 `DATABASE_URL` — the same database the Planner uses (tables `printed_parts`,
 `production_events`, `shift_plans`, created automatically on first run). Browser

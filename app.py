@@ -36,6 +36,7 @@ from odoo_client import (  # noqa: E402
 )
 from pdf_service import (  # noqa: E402
     PDFSearchError,
+    first_pages_pdf,
     get_print_artifact,
     prepare_matching_pages,
 )
@@ -341,7 +342,7 @@ def lookup():
                 page_matches.append(page_match)
             document_match["page_matches"] = page_matches
             first_token = document_match.pop("first_token", None)
-            all_token = document_match.pop("all_token", None)
+            all_token = document_match.get("all_token")
             if first_token:
                 document_match["print_url"] = url_for(
                     "print_page",
@@ -1157,6 +1158,19 @@ def _planner_quantity_fulfilled(error: PlannerSyncError) -> bool:
 @app.post("/api/print-queue")
 def add_print_queue_item():
     payload = request.get_json(silent=True) or {}
+    label_token = str(payload.get("label_token") or "")
+    if label_token:
+        artifact = get_print_artifact(label_token)
+        if artifact is None:
+            return jsonify(error="Label PDF expired. Look up the part again."), 400
+        try:
+            too_many = int(payload.get("quantity", 1)) > artifact.page_count
+        except (TypeError, ValueError, OverflowError):
+            too_many = False  # _part_qty rejects it below
+        if too_many:
+            return jsonify(
+                error=f"Quantity cannot exceed the {artifact.page_count} labels in the PDF."
+            ), 400
     if not _planner_sync_enabled():
         work_date = str(payload.get("work_date", "")).strip()
         if not work_date:
@@ -1341,7 +1355,9 @@ def clear_print_queue():
 def print_page(token):
     if get_print_artifact(token) is None:
         abort(404)
-    return redirect(url_for("print_page_pdf", token=token))
+    return redirect(
+        url_for("print_page_pdf", token=token, count=request.args.get("count"))
+    )
 
 
 @app.get("/api/print-pages/<token>.pdf")
@@ -1349,8 +1365,15 @@ def print_page_pdf(token):
     artifact = get_print_artifact(token)
     if artifact is None:
         abort(404)
+    try:
+        pdf_bytes = first_pages_pdf(
+            artifact,
+            request.args.get("count", artifact.page_count, type=int),
+        )
+    except ValueError:
+        abort(400)
     return send_file(
-        io.BytesIO(artifact.pdf_bytes),
+        io.BytesIO(pdf_bytes),
         mimetype="application/pdf",
         as_attachment=False,
         download_name="matching-pages.pdf",
