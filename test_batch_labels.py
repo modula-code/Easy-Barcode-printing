@@ -1,6 +1,9 @@
 import io
+import os
 import unittest
 from unittest.mock import patch
+
+os.environ.setdefault("PLANNER_RETRY_INTERVAL", "0")
 
 from pypdf import PdfReader, PdfWriter
 

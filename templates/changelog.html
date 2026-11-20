@@ -1,16 +1,10 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Drawing Changes</title>
-        <link
-            rel="stylesheet"
-            href="{{ url_for('static', filename='workflow.css') }}"
-        />
-        <style>
+{% extends "base.html" %}
+{% block title %}Drawing Changes{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='workflow.css') }}" />
+<style>
             .eco-order + .eco-order {
-                border-top: 1px solid var(--line, #d8c8c1);
+                border-top: 1px solid var(--line);
             }
 
             .eco-order {
@@ -26,8 +20,8 @@
             }
 
             .eco-po {
-                font-size: 1.1rem;
-                font-weight: 800;
+                font-size: 1.125rem;
+                font-weight: 600;
             }
 
             .eco-panels {
@@ -42,54 +36,35 @@
                 gap: 2px;
                 padding: 8px 12px;
                 border-radius: 8px;
-                border-left: 5px solid #c2200a;
-                background: #fdf1ee;
+                border-left: 5px solid var(--destructive);
+                background: var(--danger-soft);
                 min-width: 190px;
             }
 
             .eco-panel-code {
-                font-weight: 800;
+                font-weight: 600;
             }
 
             .eco-panel-rev {
-                font-weight: 700;
-                color: #a01a08;
+                font-weight: 600;
+                color: var(--destructive);
             }
 
             .eco-panel-date {
-                font-size: 0.85rem;
-                color: var(--muted, #6b4b41);
+                font-size: 0.875rem;
+                color: var(--muted-foreground);
             }
 
             .filter-row .field {
                 width: 190px;
             }
         </style>
-    </head>
-    <body>
-        <header class="app-header">
-            <div class="header-inner">
-                <a class="brand" href="/">
-                    <img
-                        src="{{ url_for('static', filename='logo.svg') }}"
-                        alt="Modula SW Enterprise"
-                    />
-                    <span class="brand-label">Barcode control</span>
-                </a>
-                <nav class="nav" aria-label="Barcode workflow">
-                    <a href="/">Label printing</a>
-                    <a href="/queue">Queue</a>
-                    <a href="/qc">QC</a>
-                    <a href="/history">History</a>
-                    <a href="/changelog" aria-current="page">Drawing changes</a>
-                </nav>
-            </div>
-        </header>
+{% endblock %}
+{% block content %}
 
         <main class="workspace">
             <section class="hero">
                 <div>
-                    <p class="eyebrow">Engineering audit</p>
                     <h1>Drawing changes</h1>
                     <p class="lede">
                         Dongkwang purchase orders (locked) whose panels have a
@@ -149,8 +124,10 @@
                 <div id="orders" class="panel-body flush" aria-live="polite"></div>
             </section>
         </main>
+{% endblock %}
+{% block scripts %}
 
-        <script>
+        <script nonce="{{ csp_nonce }}">
             const panelFilter = document.querySelector("#panel-filter");
             const poFilter = document.querySelector("#po-filter");
             const ordersBox = document.querySelector("#orders");
@@ -291,5 +268,4 @@
             poFilter.addEventListener("input", renderOrders);
             load();
         </script>
-    </body>
-</html>
+{% endblock %}

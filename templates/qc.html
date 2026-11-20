@@ -1,38 +1,13 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Panel Quality Control</title>
-        <link
-            rel="stylesheet"
-            href="{{ url_for('static', filename='workflow.css') }}"
-        />
-    </head>
-    <body>
-        <header class="app-header">
-            <div class="header-inner">
-                <a class="brand" href="/">
-                    <img
-                        src="{{ url_for('static', filename='logo.svg') }}"
-                        alt="Modula SW Enterprise"
-                    />
-                    <span class="brand-label">Barcode control</span>
-                </a>
-                <nav class="nav" aria-label="Barcode workflow">
-                    <a href="/">Label printing</a>
-                    <a href="/queue">Queue</a>
-                    <a href="/qc" aria-current="page">QC</a>
-                    <a href="/history">History</a>
-                    <a href="/changelog">Drawing changes</a>
-                </nav>
-            </div>
-        </header>
+{% extends "base.html" %}
+{% block title %}Panel Quality Control{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='workflow.css') }}" />
+{% endblock %}
+{% block content %}
 
         <main class="workspace">
             <section class="hero">
                 <div>
-                    <p class="eyebrow">Quality correction</p>
                     <h1>Panel QC</h1>
                     <p class="lede">
                         Record the problem and disposition, then reject one panel.
@@ -106,7 +81,6 @@
         <dialog id="qc-dialog" class="qc-dialog">
             <form id="qc-form">
                 <div>
-                    <p class="eyebrow">Record non-conformance</p>
                     <h2>Reject one panel</h2>
                     <p id="qc-dialog-panel" class="qc-dialog-panel"></p>
                 </div>
@@ -140,8 +114,10 @@
                 </div>
             </form>
         </dialog>
+{% endblock %}
+{% block scripts %}
 
-        <script>
+        <script nonce="{{ csp_nonce }}">
             const records = document.querySelector("#qc-records");
             const searchInput = document.querySelector("#search");
             const dateInput = document.querySelector("#qc-date");
@@ -360,5 +336,4 @@
             const requestedDate = new URLSearchParams(location.search).get("date") || "";
             load(requestedDate).catch((error) => showStatus(error.message, true));
         </script>
-    </body>
-</html>
+{% endblock %}

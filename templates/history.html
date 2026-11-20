@@ -1,45 +1,20 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Production History</title>
-        <link
-            rel="stylesheet"
-            href="{{ url_for('static', filename='workflow.css') }}"
-        />
-    </head>
-    <body>
-        <header class="app-header">
-            <div class="header-inner">
-                <a class="brand" href="/">
-                    <img
-                        src="{{ url_for('static', filename='logo.svg') }}"
-                        alt="Modula SW Enterprise"
-                    />
-                    <span class="brand-label">Barcode control</span>
-                </a>
-                <nav class="nav" aria-label="Barcode workflow">
-                    <a href="/">Label printing</a>
-                    <a href="/queue">Queue</a>
-                    <a href="/qc">QC</a>
-                    <a href="/history" aria-current="page">History</a>
-                    <a href="/changelog">Drawing changes</a>
-                </nav>
-            </div>
-        </header>
+{% extends "base.html" %}
+{% block title %}Production History{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='workflow.css') }}" />
+{% endblock %}
+{% block content %}
 
         <main class="workspace">
             <section class="hero">
                 <div>
-                    <p class="eyebrow">Production audit</p>
                     <h1>History</h1>
                     <p class="lede">
                         Review what synced, what QC rejected, and the total panel
                         quantity left for any work date.
                     </p>
                 </div>
-                <div class="hero-actions" style="align-items: end">
+                <div class="hero-actions">
                     <label class="field">
                         <span>From</span>
                         <input id="export-from" type="date" />
@@ -55,7 +30,7 @@
                         >Export PDF</a
                     >
                     <button id="retry-all-button" type="button" class="secondary">
-                        Retry sync · all days
+                        Retry sync for all days
                     </button>
                 </div>
             </section>
@@ -94,7 +69,7 @@
                                 <p>Immutable production and QC sync events.</p>
                             </div>
                             <button id="retry-day-button" type="button" class="secondary" hidden>
-                                Retry sync · this day
+                                Retry sync for this day
                             </button>
                         </div>
                         <div id="timeline" class="timeline" aria-live="polite"></div>
@@ -112,8 +87,10 @@
                 </div>
             </div>
         </main>
+{% endblock %}
+{% block scripts %}
 
-        <script>
+        <script nonce="{{ csp_nonce }}">
             const dateInput = document.querySelector("#history-date");
             const dateList = document.querySelector("#date-list");
             const timeline = document.querySelector("#timeline");
@@ -349,7 +326,7 @@
                 dateInput.value = date;
                 dateInput.max = queue.today;
                 document.querySelector("#activity-title").textContent =
-                    `Activity · ${formatDate(date)}`;
+                    `Activity on ${formatDate(date)}`;
                 exportFrom.value = exportTo.value = date;
                 exportFrom.max = exportTo.max = queue.today;
                 updateExportLinks();
@@ -425,7 +402,7 @@
                     ).items.filter((item) => !workDate || item.work_date === workDate);
                     for (const [index, item] of items.entries()) {
                         showStatus(
-                            `Retrying ${index + 1} of ${items.length} · ` +
+                            `Retrying ${index + 1} of ${items.length}: ` +
                                 `${item.part_code} (${formatDate(item.work_date)})…`,
                         );
                         const response = await fetch(
@@ -485,5 +462,4 @@
 
             start().catch((error) => showStatus(error.message, true));
         </script>
-    </body>
-</html>
+{% endblock %}

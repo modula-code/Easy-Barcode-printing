@@ -1,6 +1,7 @@
 import json
 import os
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
@@ -10,7 +11,7 @@ class PlannerSyncError(RuntimeError):
         self.status_code = status_code
 
 
-def sync_production_event(payload: dict) -> dict:
+def _planner_request(method: str, path: str, payload: dict | None = None) -> dict:
     base_url = os.getenv("PLANNER_API_URL", "").strip().rstrip("/")
     token = os.getenv("BARCODE_SYNC_TOKEN", "").strip()
     if not base_url or not token:
@@ -20,13 +21,13 @@ def sync_production_event(payload: dict) -> dict:
         )
 
     request = Request(
-        f"{base_url}/tracking/barcode-events",
-        data=json.dumps(payload).encode("utf-8"),
+        f"{base_url}{path}",
+        data=None if payload is None else json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
             "X-Barcode-Sync-Token": token,
         },
-        method="POST",
+        method=method,
     )
     try:
         with urlopen(
@@ -40,6 +41,17 @@ def sync_production_event(payload: dict) -> dict:
             message = data.get("message") or data.get("error")
         except (json.JSONDecodeError, UnicodeDecodeError):
             message = None
-        raise PlannerSyncError(message or f"Planner rejected the event ({exc.code}).", exc.code) from exc
-    except (URLError, TimeoutError, OSError) as exc:
+        raise PlannerSyncError(message or f"Planner rejected the request ({exc.code}).", exc.code) from exc
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         raise PlannerSyncError(f"Could not reach Planner: {exc}") from exc
+
+
+def sync_production_event(payload: dict) -> dict:
+    return _planner_request("POST", "/tracking/barcode-events", payload)
+
+
+def planner_po_status(po_number: str) -> dict:
+    """{known, open, plans[]} for a PO, from GET /tracking/barcode-po."""
+    return _planner_request(
+        "GET", f"/tracking/barcode-po?poNumber={quote(po_number, safe='')}"
+    )

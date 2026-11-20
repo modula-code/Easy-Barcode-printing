@@ -1,8 +1,9 @@
-flask
-gunicorn
-python-dotenv
-pypdf
-reportlab
-psycopg[binary]
-google-auth
-google-api-python-client
+# Pinned to the versions this service is tested with. Bump deliberately.
+flask==3.1.3
+gunicorn==26.0.0
+python-dotenv==1.2.2
+pypdf==6.14.2
+reportlab==5.0.0
+psycopg[binary]==3.3.4
+google-auth==2.56.3
+google-api-python-client==2.198.0

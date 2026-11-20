@@ -1,38 +1,13 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Production Queue</title>
-        <link
-            rel="stylesheet"
-            href="{{ url_for('static', filename='workflow.css') }}"
-        />
-    </head>
-    <body>
-        <header class="app-header">
-            <div class="header-inner">
-                <a class="brand" href="/">
-                    <img
-                        src="{{ url_for('static', filename='logo.svg') }}"
-                        alt="Modula SW Enterprise"
-                    />
-                    <span class="brand-label">Barcode control</span>
-                </a>
-                <nav class="nav" aria-label="Barcode workflow">
-                    <a href="/">Label printing</a>
-                    <a href="/queue" aria-current="page">Queue</a>
-                    <a href="/qc">QC</a>
-                    <a href="/history">History</a>
-                    <a href="/changelog">Drawing changes</a>
-                </nav>
-            </div>
-        </header>
+{% extends "base.html" %}
+{% block title %}Production Queue{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='workflow.css') }}" />
+{% endblock %}
+{% block content %}
 
         <main class="workspace">
             <section class="hero">
                 <div>
-                    <p class="eyebrow">Today’s production</p>
                     <h1>Production queue</h1>
                     <p class="lede">
                         A live view of panel codes recorded today. Correct
@@ -86,7 +61,7 @@
                         <h2>Sync attention</h2>
                         <p>Only records that still need Planner are shown here.</p>
                     </div>
-                    <a class="button secondary" href="/history">Full audit</a>
+                    <a class="button secondary" href="/history">View history</a>
                 </div>
                 <div class="panel-body">
                     <p id="sync-notice" class="notice">Checking Planner sync…</p>
@@ -95,7 +70,25 @@
             </section>
         </main>
 
-        <script>
+        <dialog id="clear-dialog" class="qc-dialog">
+            <form method="dialog">
+                <div>
+                    <h2>Clear today’s local rows?</h2>
+                    <p class="qc-dialog-panel">
+                        Unsynced rows are removed and cannot be restored.
+                        Panels already synced to Planner stay.
+                    </p>
+                </div>
+                <div class="button-row qc-dialog-actions">
+                    <button class="secondary" value="cancel">Keep rows</button>
+                    <button class="danger" value="clear">Clear local rows</button>
+                </div>
+            </form>
+        </dialog>
+{% endblock %}
+{% block scripts %}
+
+        <script nonce="{{ csp_nonce }}">
             const records = document.querySelector("#records");
             const syncEvents = document.querySelector("#sync-events");
             const syncNotice = document.querySelector("#sync-notice");
@@ -261,13 +254,14 @@
                 renderSync(ledger);
             }
 
-            clearButton.addEventListener("click", async () => {
-                if (
-                    !confirm(
-                        "Clear today’s unsynced local rows? Planner-synced panels will stay.",
-                    )
-                )
-                    return;
+            const clearDialog = document.querySelector("#clear-dialog");
+            clearButton.addEventListener("click", () => {
+                // Esc keeps the previous returnValue, so reset it each time.
+                clearDialog.returnValue = "";
+                clearDialog.showModal();
+            });
+            clearDialog.addEventListener("close", async () => {
+                if (clearDialog.returnValue !== "clear") return;
                 clearButton.disabled = true;
                 try {
                     const data = await requestJson("/api/print-queue", {
@@ -284,5 +278,4 @@
 
             load().catch((error) => showStatus(error.message, true));
         </script>
-    </body>
-</html>
+{% endblock %}

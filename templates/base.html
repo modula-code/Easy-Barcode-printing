@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{% block title %}Barcode control{% endblock %} | Modula</title>
+        <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}" />
+        {% block head %}{% endblock %}
+    </head>
+    <body>
+        <header class="site-header">
+            <div class="site-header-inner">
+                <a class="site-brand" href="{{ url_for('index') }}">
+                    <img
+                        src="{{ url_for('static', filename='logo.png') }}"
+                        alt="Modula – A JSW Enterprise"
+                    />
+                    <span>Barcode control</span>
+                </a>
+                <nav class="site-nav" aria-label="Barcode workflow">
+                    {% for endpoint, label in [
+                        ("index", "Label printing"),
+                        ("queue_page", "Queue"),
+                        ("qc_page", "QC"),
+                        ("history_page", "History"),
+                        ("changelog_page", "Drawing changes"),
+                    ] %}
+                    <a
+                        href="{{ url_for(endpoint) }}"
+                        {% if request.endpoint == endpoint %}aria-current="page"{% endif %}
+                        >{{ label }}</a
+                    >
+                    {% endfor %}
+                </nav>
+                <div class="site-tools">
+                    <a
+                        id="sync-pill"
+                        class="sync-pill"
+                        href="{{ url_for('history_page') }}"
+                        hidden
+                    ></a>
+                </div>
+            </div>
+        </header>
+
+        {% block content %}{% endblock %}
+
+        <script nonce="{{ csp_nonce }}">
+            // Planner sync status. The server retries on its own; this only
+            // shows whether anything is still waiting.
+            const syncPill = document.getElementById("sync-pill");
+            async function refreshSyncPill() {
+                try {
+                    const response = await fetch("/api/production-events/pending");
+                    if (!response.ok) return;
+                    const data = await response.json();
+                    const waiting = data.items.length;
+                    syncPill.hidden = false;
+                    syncPill.dataset.state = !data.enabled
+                        ? "off"
+                        : waiting
+                          ? "waiting"
+                          : "ok";
+                    syncPill.textContent = !data.enabled
+                        ? "Planner sync off"
+                        : waiting
+                          ? `${waiting} waiting for Planner`
+                          : "Planner in sync";
+                    syncPill.title = waiting
+                        ? "Retried automatically. Open History for the reasons."
+                        : "";
+                } catch {
+                    // Offline: keep the last known state on screen.
+                }
+            }
+            refreshSyncPill();
+            setInterval(refreshSyncPill, 30000);
+        </script>
+        {% block scripts %}{% endblock %}
+    </body>
+</html>

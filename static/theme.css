@@ -1,0 +1,267 @@
+/* Modula brand tokens, copied unchanged from the Modula design system
+   (Logistics Helpdesk theme, 2026-10-08). Do not adjust these values here;
+   change the design system first. */
+@font-face {
+    font-family: Geist;
+    src: url("fonts/Geist-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    src: url("fonts/GeistMono-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-display: swap;
+}
+
+:root {
+    color-scheme: light;
+    --radius: 0.625rem;
+    --background: oklch(0.985 0.008 85);
+    --foreground: oklch(0.24 0.028 55);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.24 0.028 55);
+    --primary: oklch(0.42 0.088 50);
+    --primary-foreground: oklch(0.985 0.012 88);
+    --secondary: oklch(0.945 0.014 82);
+    --secondary-foreground: oklch(0.32 0.05 54);
+    --muted: oklch(0.955 0.012 82);
+    --muted-foreground: oklch(0.52 0.03 60);
+    --accent: oklch(0.84 0.085 78);
+    --accent-foreground: oklch(0.3 0.058 52);
+    --destructive: oklch(0.52 0.16 28);
+    --destructive-foreground: oklch(0.985 0.012 88);
+    --border: oklch(0.89 0.014 78);
+    --input: oklch(0.89 0.014 78);
+    --ring: oklch(0.55 0.075 56);
+    --success: oklch(0.5 0.105 150);
+    --success-foreground: oklch(0.985 0.012 88);
+    --warning: oklch(0.48 0.12 72);
+    --warning-foreground: oklch(0.26 0.05 55);
+    --info: oklch(0.52 0.09 230);
+    --info-foreground: oklch(0.985 0.012 88);
+
+    --font-sans: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        color-scheme: dark;
+        --background: oklch(0.19 0.012 56);
+        --foreground: oklch(0.94 0.012 84);
+        --card: oklch(0.23 0.015 54);
+        --card-foreground: oklch(0.94 0.012 84);
+        --primary: oklch(0.72 0.095 62);
+        --primary-foreground: oklch(0.2 0.03 52);
+        --secondary: oklch(0.3 0.018 56);
+        --secondary-foreground: oklch(0.9 0.015 82);
+        --muted: oklch(0.28 0.016 56);
+        --muted-foreground: oklch(0.68 0.022 70);
+        --accent: oklch(0.36 0.05 70);
+        --accent-foreground: oklch(0.92 0.04 84);
+        --destructive: oklch(0.64 0.16 28);
+        --destructive-foreground: oklch(0.97 0.012 88);
+        --border: oklch(0.34 0.018 58);
+        --input: oklch(0.34 0.018 58);
+        --ring: oklch(0.6 0.07 62);
+        --success: oklch(0.68 0.1 150);
+        --success-foreground: oklch(0.18 0.03 150);
+        --warning: oklch(0.78 0.13 74);
+        --warning-foreground: oklch(0.24 0.05 55);
+        --info: oklch(0.68 0.09 230);
+        --info-foreground: oklch(0.18 0.03 230);
+    }
+}
+
+/* Names the page stylesheets were written against, pointed at the brand
+   tokens. Tints follow the design system's badge recipe (colour at 10%). */
+:root {
+    --ink: var(--foreground);
+    --line: var(--border);
+    --page: var(--background);
+    --surface: var(--card);
+    --surface-soft: var(--muted);
+    --primary-hover: var(--ring);
+    --danger: var(--destructive);
+    --success-soft: color-mix(in oklch, var(--success) 10%, var(--card));
+    --warning-soft: color-mix(in oklch, var(--warning) 10%, var(--card));
+    --danger-soft: color-mix(in oklch, var(--destructive) 10%, var(--card));
+    --danger-line: color-mix(in oklch, var(--destructive) 30%, var(--card));
+    --soft-accent: var(--secondary);
+    --success-bg: var(--muted);
+    --success-line: var(--border);
+    --error-bg: var(--danger-soft);
+    --error-line: var(--danger-line);
+    --focus-ring: 0 0 0 3px color-mix(in oklch, var(--ring) 30%, transparent);
+    /* Borders carry the structure; shadows stay barely there. */
+    --shadow: 0 1px 2px oklch(0.24 0.028 55 / 0.05);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    min-height: 100svh;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* --- Shared header ------------------------------------------------------ */
+.site-header {
+    border-bottom: 1px solid var(--border);
+    background: var(--card);
+}
+
+.site-header-inner {
+    display: flex;
+    width: min(1180px, calc(100% - 32px));
+    min-height: 64px;
+    margin: auto;
+    padding: 8px 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 20px;
+}
+
+.site-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--foreground);
+    text-decoration: none;
+}
+
+.site-brand img {
+    display: block;
+    width: auto;
+    height: 32px;
+}
+
+.site-brand span {
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.site-nav {
+    display: flex;
+    margin-left: auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+}
+
+.site-nav a {
+    display: inline-flex;
+    min-height: 40px;
+    padding: 0 12px;
+    border-radius: calc(var(--radius) - 2px);
+    align-items: center;
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.site-nav a:hover {
+    background: var(--muted);
+    color: var(--foreground);
+}
+
+.site-nav a[aria-current="page"] {
+    background: var(--secondary);
+    color: var(--secondary-foreground);
+    font-weight: 600;
+}
+
+.site-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Planner sync status: a labelled dot, never colour alone. */
+.sync-pill {
+    display: inline-flex;
+    min-height: 32px;
+    padding: 0 10px;
+    border: 1px solid color-mix(in oklch, var(--success) 30%, var(--card));
+    border-radius: 999px;
+    align-items: center;
+    gap: 7px;
+    background: var(--success-soft);
+    color: var(--success);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.sync-pill::before {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    content: "";
+}
+
+.sync-pill[data-state="waiting"] {
+    border-color: color-mix(in oklch, var(--warning) 30%, var(--card));
+    background: var(--warning-soft);
+    color: var(--warning);
+}
+
+.sync-pill[data-state="off"] {
+    border-color: var(--border);
+    background: var(--muted);
+    color: var(--muted-foreground);
+}
+
+@media (prefers-color-scheme: dark) {
+    /* The lockup is only legible on white. */
+    .site-brand img {
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: #fff;
+    }
+}
+
+@media (max-width: 720px) {
+    .site-brand span {
+        display: none;
+    }
+
+    .site-nav {
+        order: 3;
+        width: 100%;
+        margin-left: 0;
+    }
+
+    .site-tools {
+        margin-left: auto;
+    }
+}

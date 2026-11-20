@@ -3,15 +3,20 @@ import io
 import json
 import os
 import re
+import secrets
+import threading
+import time
 import xmlrpc.client
 import zipfile
 from datetime import date, datetime, timezone
 from html import escape
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from flask import (
     Flask,
     abort,
+    g,
     jsonify,
     redirect,
     render_template,
@@ -40,7 +45,11 @@ from pdf_service import (  # noqa: E402
     get_print_artifact,
     prepare_matching_pages,
 )
-from planner_client import PlannerSyncError, sync_production_event  # noqa: E402
+from planner_client import (  # noqa: E402
+    PlannerSyncError,
+    planner_po_status,
+    sync_production_event,
+)
 from queue_store import (  # noqa: E402
     APP_TIMEZONE,
     QC_DISPOSITIONS,
@@ -51,6 +60,7 @@ from queue_store import (  # noqa: E402
     fail_production_event,
     get_printed_part,
     get_production_event,
+    list_due_production_events,
     list_history_dates,
     list_pending_production_events,
     list_printed_parts,
@@ -72,6 +82,45 @@ PRODUCTION_REPORT_TEMPLATE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "DKP_AYENA_Line_Hourly_Production_Report.xlsx",
 )
+
+
+
+# No sign-in: this service must only be reachable from the factory network.
+@app.before_request
+def _guard_request():
+    g.csp_nonce = secrets.token_urlsafe(16)
+    # Refuse writes sent by another site's page in an operator's browser.
+    origin = request.headers.get("Origin")
+    if (
+        request.method not in {"GET", "HEAD", "OPTIONS"}
+        and origin
+        and urlsplit(origin).netloc != request.host
+    ):
+        return jsonify(error="Cross-site request refused."), 403
+    return None
+
+
+@app.after_request
+def _security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    if response.mimetype == "text/html":
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            f"script-src 'self' 'nonce-{g.get('csp_nonce', '')}'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+            "frame-src 'self' blob:; object-src 'none'; base-uri 'self'; "
+            "form-action 'self'; frame-ancestors 'self'",
+        )
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
+@app.context_processor
+def _template_globals():
+    return {"csp_nonce": g.get("csp_nonce", "")}
 
 
 @app.get("/")
@@ -185,6 +234,26 @@ def partner_ref():
         return jsonify(error="The lookup failed unexpectedly."), 500
 
     return jsonify(result)
+
+
+@app.get("/api/planner-po")
+def planner_po():
+    """Is this PO on a Planner plan? Advisory only: any failure answers
+    checked=False so the floor is never warned on a guess or blocked."""
+    po_number = str(request.args.get("po_number", "")).strip()
+    if not po_number or not _planner_sync_enabled():
+        return jsonify(checked=False)
+    try:
+        status = planner_po_status(po_number)
+    except PlannerSyncError as exc:
+        app.logger.warning("Planner PO check unavailable: %s", exc)
+        return jsonify(checked=False)
+    return jsonify(
+        checked=True,
+        known=bool(status.get("known")),
+        open=bool(status.get("open")),
+        plans=[str(plan.get("label") or "") for plan in status.get("plans") or []],
+    )
 
 
 @app.get("/api/po-suggestions")
@@ -1134,7 +1203,9 @@ def _push_to_planner(event):
             synced = sync_production_event(payload)
         return complete_production_event(event["event_id"], synced), synced
     except (PlannerSyncError, ValueError) as exc:
-        fail_production_event(event["event_id"], str(exc))
+        fail_production_event(
+            event["event_id"], str(exc), getattr(exc, "status_code", None)
+        )
         raise
 
 
@@ -1213,6 +1284,8 @@ def add_print_queue_item():
         )
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
+    if event["status"] == "cancelled":
+        return jsonify(error="That print was deleted. Print the label again."), 409
     if event["status"] == "skipped":
         item = skip_production_event(event["event_id"], event["error"])
         return jsonify(item=item, sync=None, sync_status="skipped"), 201
@@ -1298,7 +1371,9 @@ def production_events():
 def pending_production_events():
     """All unsynced events across every day. The browser retries them one at a
     time so a big backlog never floods Planner or outlives a request timeout."""
-    return jsonify(items=list_pending_production_events())
+    return jsonify(
+        items=list_pending_production_events(), enabled=_planner_sync_enabled()
+    )
 
 
 @app.post("/api/production-events/<event_id>/retry")
@@ -1313,13 +1388,62 @@ def retry_production_event(event_id):
         return jsonify(error="That event is already synced with Planner."), 409
     if event["status"] == "skipped":
         return jsonify(error="Planner quantity was fulfilled; this event is local only."), 409
+    if event["status"] == "cancelled":
+        return jsonify(error="That print was deleted before it synced."), 409
     try:
         item, synced = _push_to_planner(event)
     except PlannerSyncError as exc:
+        if event["action"] == "produced" and _planner_quantity_fulfilled(exc):
+            try:
+                item = skip_production_event(event_id, str(exc))
+            except ValueError as local_exc:
+                return jsonify(error=str(local_exc)), 500
+            return jsonify(item=item, sync=None, sync_status="skipped")
         return jsonify(error=str(exc)), exc.status_code
     except ValueError as exc:
         return jsonify(error=str(exc)), 500
     return jsonify(item=item, sync=synced)
+
+
+def _retry_due_events():
+    """One pass of the outbox: resend every unsynced event whose backoff is up.
+
+    Safe to repeat: the event id is unchanged, so Planner replays an event it
+    already has instead of counting it twice."""
+    for event in list_due_production_events():
+        try:
+            _push_to_planner(event)
+        except PlannerSyncError as exc:
+            if event["action"] == "produced" and _planner_quantity_fulfilled(exc):
+                skip_production_event(event["event_id"], str(exc))
+            elif event["action"] == "produced" and not event["target_row_id"]:
+                # Staged, then the request died before the print reached the
+                # queue. Show it there so the floor can see what is waiting.
+                record_local_production_event(event["event_id"], str(exc))
+            if exc.status_code >= 500:
+                return  # Planner is down; leave the rest for the next pass.
+        except ValueError as exc:
+            app.logger.warning("Outbox: event %s: %s", event["event_id"], exc)
+
+
+def _outbox_worker(interval):
+    while True:
+        time.sleep(interval)
+        if not _planner_sync_enabled():
+            continue
+        try:
+            _retry_due_events()
+        except Exception:
+            app.logger.exception("Outbox pass failed")
+
+
+# One gunicorn worker (see gunicorn.conf.py), so one of these threads. A second
+# copy would only cause harmless replays. 0 switches automatic retries off.
+_OUTBOX_INTERVAL = float(os.getenv("PLANNER_RETRY_INTERVAL", "30"))
+if _OUTBOX_INTERVAL > 0:
+    threading.Thread(
+        target=_outbox_worker, args=(_OUTBOX_INTERVAL,), daemon=True, name="outbox"
+    ).start()
 
 
 @app.put("/api/print-queue/<int:item_id>")

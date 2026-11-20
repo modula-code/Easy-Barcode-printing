@@ -32,9 +32,8 @@ def _work_date(value: str | None = None) -> str:
 
 
 def _database_url() -> str:
-    # The barcode station shares the main Planner Postgres. Its tables
-    # (printed_parts, production_events, shift_plans) don't collide with the
-    # Planner's. Override with DATABASE_URL in every real deployment.
+    # Local development fallback only. Every deployment sets DATABASE_URL
+    # (docker-compose.yml points it at this service's own db container).
     return os.getenv(
         "DATABASE_URL",
         "postgresql://modula:modula@localhost:5432/modula_planner",
@@ -116,6 +115,16 @@ def _ensure_schema() -> None:
             connection.execute(
                 "ALTER TABLE production_events "
                 "ADD COLUMN IF NOT EXISTS disposition TEXT NOT NULL DEFAULT ''"
+            )
+            # Retry bookkeeping: how often Planner was tried, and the HTTP
+            # status of its last answer (NULL = never answered).
+            connection.execute(
+                "ALTER TABLE production_events "
+                "ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0"
+            )
+            connection.execute(
+                "ALTER TABLE production_events "
+                "ADD COLUMN IF NOT EXISTS error_status INTEGER"
             )
         _schema_ready = True
 
@@ -279,17 +288,21 @@ def stage_production_event(
     return dict(row)
 
 
-def fail_production_event(event_id: str, error: str) -> None:
+def fail_production_event(
+    event_id: str, error: str, status_code: int | None = None
+) -> None:
     _ensure_schema()
     with _queue_lock, _connect() as connection:
         connection.execute(
             """
             UPDATE production_events
-            SET status = 'error', error = %s, updated_at = %s
-            WHERE event_id = %s AND status != 'synced'
+            SET status = 'error', error = %s, error_status = %s,
+                attempts = attempts + 1, updated_at = %s
+            WHERE event_id = %s AND status NOT IN ('synced', 'cancelled')
             """,
             (
                 str(error or "Planner sync failed.")[:1000],
+                status_code,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 event_id,
             ),
@@ -373,16 +386,32 @@ def skip_production_event(event_id: str, error: str) -> dict | None:
         if event["action"] != "produced":
             raise ValueError("Only production events can be kept local.")
 
-        row = connection.execute(
+        # A failed sync already put this event's quantity in its own 'error'
+        # row; keep that row instead of adding the quantity a second time.
+        own_row = (
+            connection.execute(
+                """
+                UPDATE printed_parts SET status = 'queued'
+                WHERE id = %s AND status = 'error'
+                RETURNING *
+                """,
+                (event["target_row_id"],),
+            ).fetchone()
+            if event["target_row_id"]
+            else None
+        )
+        row = own_row or connection.execute(
             """
             SELECT * FROM printed_parts
             WHERE work_date = %s AND po_number = %s AND part_code = %s
-              AND status IN ('queued', 'error')
+              AND status = 'queued'
             ORDER BY id DESC LIMIT 1 FOR UPDATE
             """,
             (event["work_date"], event["po_number"], event["part_code"]),
         ).fetchone()
-        if row:
+        if own_row:
+            pass
+        elif row:
             quantity = int(row["quantity"]) + int(event["quantity"])
             if quantity > 500:
                 raise ValueError("quantity must be between 1 and 500.")
@@ -458,9 +487,16 @@ def complete_production_event(event_id: str, planner_response: dict) -> dict | N
                 (_so_number(item.get("soNumber")), int(item.get("quantity") or 0))
                 for item in allocations
             ]
+            # Planner may take only part of a print when the PO is nearly
+            # fulfilled; the rest ("overflow") stays in the queue as local.
+            try:
+                overflow = int(planner_response.get("overflow") or 0)
+            except (TypeError, ValueError):
+                overflow = -1
             if (
-                any(quantity <= 0 for _, quantity in normalized_allocations)
-                or sum(quantity for _, quantity in normalized_allocations)
+                overflow < 0
+                or any(quantity <= 0 for _, quantity in normalized_allocations)
+                or sum(quantity for _, quantity in normalized_allocations) + overflow
                 != int(event["quantity"])
             ):
                 raise ValueError("Planner response included invalid SO allocations.")
@@ -516,6 +552,21 @@ def complete_production_event(event_id: str, planner_response: dict) -> dict | N
                     ).fetchone()
                     row_ids.append(inserted["id"])
             row_id = row_ids[0]
+            if overflow:
+                connection.execute(
+                    """
+                    INSERT INTO printed_parts
+                        (po_number, part_code, quantity, status, work_date, created_at)
+                    VALUES (%s, %s, %s, 'queued', %s, %s)
+                    """,
+                    (
+                        event["po_number"],
+                        event["part_code"],
+                        overflow,
+                        event["work_date"],
+                        now,
+                    ),
+                )
             connection.execute(
                 "UPDATE production_events SET target_row_id = %s WHERE event_id = %s",
                 (row_id, event_id),
@@ -564,7 +615,7 @@ def add_printed_part(
             """
             SELECT * FROM printed_parts
             WHERE work_date = %s AND po_number = %s AND part_code = %s
-              AND status IN ('queued', 'error')
+              AND status = 'queued'
             ORDER BY id DESC LIMIT 1
             """,
             (work_date, po, code),
@@ -602,6 +653,45 @@ def add_printed_part(
     return dict(row)
 
 
+def _release_open_event(connection, row_id: int, remove: int | None) -> None:
+    """Keep a not-yet-synced production event in step with a local change to
+    its queue row, so a later retry cannot resend the old quantity.
+
+    remove=None cancels the event; remove=N takes N off it. Only safe when
+    Planner definitely refused the event (a 4xx answer). After a timeout it may
+    have landed, so the local change has to wait for the retry to settle it."""
+    event = connection.execute(
+        """
+        SELECT * FROM production_events
+        WHERE target_row_id = %s AND action = 'produced'
+          AND status IN ('pending', 'error')
+        FOR UPDATE
+        """,
+        (row_id,),
+    ).fetchone()
+    if not event:
+        return
+    status = event["error_status"]
+    if status is None or status in (408, 429) or not 400 <= status < 500:
+        raise ValueError(
+            "Planner has not confirmed this print yet. Try again once it has synced."
+        )
+    left = 0 if remove is None else int(event["quantity"]) - remove
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if left > 0:
+        connection.execute(
+            "UPDATE production_events SET quantity = %s, updated_at = %s "
+            "WHERE event_id = %s",
+            (left, now, event["event_id"]),
+        )
+    else:
+        connection.execute(
+            "UPDATE production_events SET status = 'cancelled', updated_at = %s "
+            "WHERE event_id = %s",
+            (now, event["event_id"]),
+        )
+
+
 def update_printed_part(
     row_id: int,
     po_number: str,
@@ -620,6 +710,10 @@ def update_printed_part(
             raise ValueError("Queue row was not found.")
         if row["work_date"] != current_work_date():
             raise ValueError("Archived queue rows cannot be edited.")
+        if row["status"] == "error":
+            # ponytail: no screen edits these rows; reject instead of rewriting
+            # the pending event. Delete and reprint to correct one.
+            raise ValueError("Rows waiting for Planner cannot be edited.")
         connection.execute(
             """
             UPDATE printed_parts
@@ -703,6 +797,7 @@ def record_local_rejection(
             raise ValueError("Queue row was not found.")
         if row["work_date"] != current_work_date():
             raise ValueError("Archived queue rows cannot be edited.")
+        _release_open_event(connection, row_id, 1)
         connection.execute(
             """
             INSERT INTO production_events
@@ -732,6 +827,7 @@ def record_local_rejection(
 def delete_printed_part(row_id: int) -> None:
     _ensure_schema()
     with _queue_lock, _connect() as connection:
+        _release_open_event(connection, row_id, None)
         cursor = connection.execute(
             """
             DELETE FROM printed_parts
@@ -750,6 +846,11 @@ def clear_printed_parts() -> int:
             """
             DELETE FROM printed_parts
             WHERE work_date = %s AND status IN ('queued', 'error')
+              AND id NOT IN (
+                  SELECT target_row_id FROM production_events
+                  WHERE target_row_id IS NOT NULL AND action = 'produced'
+                    AND status IN ('pending', 'error')
+              )
             """,
             (current_work_date(),),
         )
@@ -795,13 +896,42 @@ def list_pending_production_events() -> list[dict]:
     with _queue_lock, _connect() as connection:
         rows = connection.execute(
             """
-            SELECT event_id, action, part_code, quantity, work_date
+            SELECT event_id, action, po_number, part_code, quantity, work_date,
+                   error, error_status, attempts, updated_at
             FROM production_events
-            WHERE status NOT IN ('synced', 'skipped')
+            WHERE status IN ('pending', 'error')
             ORDER BY created_at, event_id
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def list_due_production_events(
+    base_seconds: int = 60, max_seconds: int = 1800
+) -> list[dict]:
+    """Unsynced events whose retry backoff has elapsed, oldest first. The wait
+    doubles per failed attempt (60s, 2m, 4m ... capped at 30m); an event never
+    tried yet waits one base interval so an in-flight request is left alone."""
+    _ensure_schema()
+    with _queue_lock, _connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT * FROM production_events
+            WHERE status IN ('pending', 'error')
+            ORDER BY created_at, event_id
+            """
+        ).fetchall()
+    now = datetime.now(timezone.utc)
+    due = []
+    for row in rows:
+        wait = min(base_seconds * 2 ** min(int(row["attempts"]), 10), max_seconds)
+        try:
+            idle = (now - datetime.fromisoformat(row["updated_at"])).total_seconds()
+        except ValueError:
+            idle = wait
+        if idle >= wait:
+            due.append(dict(row))
+    return due
 
 
 def list_production_events(work_date: str | None = None) -> dict:
@@ -815,7 +945,7 @@ def list_production_events(work_date: str | None = None) -> dict:
         rows = connection.execute(
             """
             SELECT * FROM production_events
-            WHERE work_date = %s
+            WHERE work_date = %s AND status != 'cancelled'
             ORDER BY created_at DESC, event_id DESC
             """,
             (selected_date,),
@@ -838,6 +968,7 @@ def list_production_events(work_date: str | None = None) -> dict:
                 "work_date": row["work_date"],
                 "status": row["status"],
                 "error": row["error"],
+                "attempts": row["attempts"],
                 "problem_description": row["problem_description"],
                 "disposition": row["disposition"],
                 "created_at": row["created_at"],
@@ -855,7 +986,7 @@ def list_production_events(work_date: str | None = None) -> dict:
         "today": current_work_date(),
         "items": items,
         "pending": sum(
-            1 for item in items if item["status"] not in {"synced", "skipped"}
+            1 for item in items if item["status"] in {"pending", "error"}
         ),
     }
 

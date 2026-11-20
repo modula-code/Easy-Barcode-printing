@@ -61,18 +61,52 @@ ODOO_TIMEOUT=20
 ODOO_REPORT_TIMEOUT=300
 ODOO_CACHE_TTL=300
 MAX_UPLOAD_SIZE_MB=20
-DATABASE_URL=postgres://modula:PASSWORD@postgres:5432/modula_planner
+POSTGRES_PASSWORD=a-strong-password
 APP_TIMEZONE=Asia/Kolkata
 PLANNER_API_URL=https://your-planner-api.example.com/api
 BARCODE_SYNC_TOKEN=the-same-secret-configured-on-planner
 PLANNER_SYNC_TIMEOUT=15
+PLANNER_RETRY_INTERVAL=30
 PORT=8000
 GUNICORN_THREADS=4
 GUNICORN_TIMEOUT=360
 ```
 
 Keep one Gunicorn worker because generated print artifacts are held in process
-memory. The supplied configuration uses one worker and four threads.
+memory and the Planner retry thread runs once per process. The supplied
+configuration uses one worker and four threads.
+
+## Access
+
+There is no sign-in. Anyone who can reach this service can read Odoo PO data
+and record production in the Planner, so expose it only on the factory network
+or behind the proxy's own access control, never on a public URL.
+
+## Planner sync
+
+With `PLANNER_SYNC_ENABLED=true` each print is written to `production_events`
+first, then sent to the Planner (`POST /tracking/barcode-events`). The event id
+never changes, so resending is safe: the Planner replays an event it already
+has.
+
+- A print the Planner did not accept stays in the queue as *Local* and is
+  retried in the background, backing off from 1 to 30 minutes per event. The
+  header shows how many are waiting; History lists the Planner's reason.
+- "Only N remain" from the Planner means the PO is already fulfilled there. The
+  print is kept local and not retried.
+- When the Planner needs fewer panels than were printed, it takes what it
+  needs; the rest stays in the queue as *Local*.
+- Several plans carrying the same PO and part are filled in priority order
+  (manual rank, then oldest plan).
+- The print page warns when the typed PO is on no Planner plan, or only on a
+  plan that is not in progress (`GET /tracking/barcode-po`).
+- While a print is waiting, QC rejections and deletions also adjust the waiting
+  event, so a later retry sends the corrected quantity. If the last attempt
+  timed out (the Planner may have counted it), those edits are refused until
+  the retry settles it.
+
+Run the checks with `python -m unittest test_sync test_batch_labels` (needs a
+local Postgres; override with `TEST_DATABASE_URL`).
 
 ## Print queue
 
@@ -82,23 +116,19 @@ label pages. **Print and record quantity** prints the first chosen pages in one 
 and records that quantity. The server rejects a quantity above N, both for the print
 and for the recorded event.
 
-Today's PO label PDFs and printed barcodes are stored in Postgres at
-`DATABASE_URL` — the same database the Planner uses (tables `printed_parts`,
-`production_events`, `shift_plans`, created automatically on first run). Browser
+Printed barcodes are stored in Postgres at `DATABASE_URL` (tables
+`printed_parts`, `production_events`, `shift_plans`, created automatically on
+first run). The compose file runs a dedicated `db` service for this. Browser
 refreshes do not clear this data. Queue rows are grouped by PO and date; a new
 day starts with an empty active queue while older dates remain available from the
-queue date picker for viewing and XLSX export. Add or replace today's PO label
-PDFs on `/plans`; operators select the active PO from the sidebar on the main
-print page.
+queue date picker for viewing and XLSX export.
 
 Prints are recorded in the local queue by default. Set
 `PLANNER_SYNC_ENABLED=true` only when this app should synchronously send
 production and rejection events to a configured Planner API.
 
-Deploy this directory's `docker-compose.yml` as its own Coolify resource (Base
-Directory `/barcode-Printing`). It has no database of its own — point
-`DATABASE_URL` at the Planner's Postgres and set `PLANNER_API_URL` and a
-`BARCODE_SYNC_TOKEN` matching the Planner. See `../DEPLOY-COOLIFY.md`.
+Deploy this directory's `docker-compose.yml` as its own Coolify resource. Set
+`PLANNER_API_URL` and a `BARCODE_SYNC_TOKEN` matching the Planner.
 
 ## API
 

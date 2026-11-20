@@ -30,13 +30,14 @@ services:
       - PORT=8000
       # URL-encode the password if it contains @ : / ? or #
       - DATABASE_URL=postgresql://${POSTGRES_USER:-barcode}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-barcode}
-      - DB_POOL_SIZE=${DB_POOL_SIZE:-5}
       - APP_TIMEZONE=${APP_TIMEZONE:-Asia/Kolkata}
       - MAX_UPLOAD_SIZE_MB=${MAX_UPLOAD_SIZE_MB:-20}
       - PLANNER_SYNC_ENABLED=${PLANNER_SYNC_ENABLED:-true}
       - PLANNER_API_URL=${PLANNER_API_URL:?set the Planner API base URL, including /api}
       - BARCODE_SYNC_TOKEN=${BARCODE_SYNC_TOKEN:?must match the Planner BARCODE_SYNC_TOKEN}
       - PLANNER_SYNC_TIMEOUT=${PLANNER_SYNC_TIMEOUT:-15}
+      # Seconds between automatic retries of unsynced events. 0 turns them off.
+      - PLANNER_RETRY_INTERVAL=${PLANNER_RETRY_INTERVAL:-30}
       - ODOO_URL=${ODOO_URL:?set ODOO_URL}
       - ODOO_DB=${ODOO_DB:?set ODOO_DB}
       - ODOO_USERNAME=${ODOO_USERNAME:?set ODOO_USERNAME}
