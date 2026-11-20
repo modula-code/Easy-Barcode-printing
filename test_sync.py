@@ -213,3 +213,57 @@ class PlannerSyncTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlannerBackoffTest(unittest.TestCase):
+    """No database needed: drives planner_client against a fake urlopen."""
+
+    def setUp(self):
+        import planner_client
+
+        self.pc = planner_client
+        env = patch.dict(
+            os.environ, {"PLANNER_API_URL": "http://planner", "BARCODE_SYNC_TOKEN": "t"}
+        )
+        env.start()
+        self.addCleanup(env.stop)
+        self.pc._strikes, self.pc._paused_until = 0, 0.0
+        self.addCleanup(setattr, self.pc, "_paused_until", 0.0)
+        self.addCleanup(setattr, self.pc, "_strikes", 0)
+
+    def _throttled(self, retry_after=None):
+        import io as _io
+        from email.message import Message
+        from urllib.error import HTTPError
+
+        headers = Message()
+        if retry_after is not None:
+            headers["Retry-After"] = str(retry_after)
+        return HTTPError("http://planner", 429, "Too Many", headers, _io.BytesIO(b"{}"))
+
+    def test_throttle_pauses_every_caller_and_doubles(self):
+        with patch.object(self.pc, "urlopen", side_effect=self._throttled()) as call:
+            with self.assertRaises(PlannerSyncError) as first:
+                self.pc.sync_production_event({})
+            self.assertEqual((first.exception.status_code, first.exception.retry_after), (429, 30))
+            # Paused: the next caller fails fast and Planner sees nothing.
+            with self.assertRaises(PlannerSyncError) as paused:
+                self.pc.planner_po_status("PO1")
+            self.assertEqual(paused.exception.status_code, 429)
+            self.assertEqual(call.call_count, 1)
+            self.pc._paused_until = 0.0  # pause over
+            with self.assertRaises(PlannerSyncError) as second:
+                self.pc.sync_production_event({})
+            self.assertEqual(second.exception.retry_after, 60)  # doubled
+
+    def test_retry_after_header_wins_when_longer(self):
+        with patch.object(self.pc, "urlopen", side_effect=self._throttled(500)):
+            with self.assertRaises(PlannerSyncError) as caught:
+                self.pc.sync_production_event({})
+        self.assertEqual(caught.exception.retry_after, 500)
+
+    def test_outbox_skips_its_pass_while_paused(self):
+        self.pc._paused_until = self.pc.time.monotonic() + 60
+        with patch.object(app, "list_due_production_events") as due:
+            app._retry_due_events()
+        due.assert_not_called()

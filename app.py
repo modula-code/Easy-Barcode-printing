@@ -1,6 +1,7 @@
 import csv
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -47,6 +48,7 @@ from pdf_service import (  # noqa: E402
 )
 from planner_client import (  # noqa: E402
     PlannerSyncError,
+    planner_cooldown,
     planner_po_status,
     sync_production_event,
 )
@@ -1399,7 +1401,9 @@ def retry_production_event(event_id):
             except ValueError as local_exc:
                 return jsonify(error=str(local_exc)), 500
             return jsonify(item=item, sync=None, sync_status="skipped")
-        return jsonify(error=str(exc)), exc.status_code
+        # Retry-After tells the browser's "Retry all" how long to wait.
+        headers = {"Retry-After": str(math.ceil(exc.retry_after))} if exc.retry_after else {}
+        return jsonify(error=str(exc)), exc.status_code, headers
     except ValueError as exc:
         return jsonify(error=str(exc)), 500
     return jsonify(item=item, sync=synced)
@@ -1410,7 +1414,11 @@ def _retry_due_events():
 
     Safe to repeat: the event id is unchanged, so Planner replays an event it
     already has instead of counting it twice."""
-    for event in list_due_production_events():
+    if planner_cooldown():
+        return  # Backing off after a 429/5xx; a later pass picks it up.
+    for index, event in enumerate(list_due_production_events()):
+        if index:
+            time.sleep(1)  # Pace a backlog instead of bursting it at Planner.
         try:
             _push_to_planner(event)
         except PlannerSyncError as exc:
@@ -1420,8 +1428,8 @@ def _retry_due_events():
                 # Staged, then the request died before the print reached the
                 # queue. Show it there so the floor can see what is waiting.
                 record_local_production_event(event["event_id"], str(exc))
-            if exc.status_code >= 500:
-                return  # Planner is down; leave the rest for the next pass.
+            if exc.status_code == 429 or exc.status_code >= 500:
+                return  # Throttled or down; the rest wait out the backoff.
         except ValueError as exc:
             app.logger.warning("Outbox: event %s: %s", event["event_id"], exc)
 

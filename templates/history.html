@@ -379,9 +379,13 @@
             exportFrom.addEventListener("change", updateExportLinks);
             exportTo.addEventListener("change", updateExportLinks);
 
-            // ponytail: one request in flight + fixed pause; add backoff if
-            // Planner starts sending Retry-After.
+            // One request in flight with a fixed pause. When the server answers
+            // with Retry-After (Planner throttled or down), wait that long and
+            // retry the same item; the server doubles the wait each time.
             const RETRY_ALL_PAUSE_MS = 1000;
+            const RETRY_ALL_MAX_WAIT_S = 120;
+            const RETRY_ALL_TRIES = 5;
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
             const retryAllButton = document.querySelector("#retry-all-button");
             const retryDayButton = document.querySelector("#retry-day-button");
 
@@ -401,32 +405,41 @@
                         await requestJson("/api/production-events/pending")
                     ).items.filter((item) => !workDate || item.work_date === workDate);
                     for (const [index, item] of items.entries()) {
-                        showStatus(
-                            `Retrying ${index + 1} of ${items.length}: ` +
-                                `${item.part_code} (${formatDate(item.work_date)})…`,
-                        );
-                        const response = await fetch(
-                            `/api/production-events/${encodeURIComponent(item.event_id)}/retry`,
-                            { method: "POST" },
-                        );
-                        if (response.ok) {
-                            sent += 1;
-                        } else {
-                            failed += 1;
-                            // Rate limited, Planner down or not configured: stop
-                            // instead of hammering it with the rest of the backlog.
-                            if (response.status === 429 || response.status >= 500) {
+                        const label =
+                            `${index + 1} of ${items.length}: ` +
+                            `${item.part_code} (${formatDate(item.work_date)})`;
+                        let response;
+                        for (let attempt = 1; ; attempt += 1) {
+                            showStatus(`Retrying ${label}…`);
+                            response = await fetch(
+                                `/api/production-events/${encodeURIComponent(item.event_id)}/retry`,
+                                { method: "POST" },
+                            );
+                            if (response.status !== 429 && response.status < 500) break;
+                            const waitS = Number(response.headers.get("Retry-After"));
+                            // No Retry-After (e.g. not configured) or out of tries:
+                            // stop instead of hammering Planner with the backlog.
+                            if (!waitS || attempt >= RETRY_ALL_TRIES) {
+                                failed += 1;
                                 const data = await response.json().catch(() => ({}));
                                 throw new Error(
                                     `Stopped after ${sent} sent, ${failed} failed: ` +
                                         (data.error || `Planner returned ${response.status}.`),
                                 );
                             }
+                            const delayS = Math.min(waitS, RETRY_ALL_MAX_WAIT_S);
+                            showStatus(
+                                `Planner is busy. Waiting ${delayS}s before retrying ${label}…`,
+                            );
+                            await sleep(delayS * 1000);
+                        }
+                        if (response.ok) {
+                            sent += 1;
+                        } else {
+                            failed += 1;
                         }
                         if (index < items.length - 1) {
-                            await new Promise((resolve) =>
-                                setTimeout(resolve, RETRY_ALL_PAUSE_MS),
-                            );
+                            await sleep(RETRY_ALL_PAUSE_MS);
                         }
                     }
                     if (items.length) {

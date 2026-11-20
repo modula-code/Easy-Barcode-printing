@@ -46,33 +46,33 @@
     --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-    :root {
-        color-scheme: dark;
-        --background: oklch(0.19 0.012 56);
-        --foreground: oklch(0.94 0.012 84);
-        --card: oklch(0.23 0.015 54);
-        --card-foreground: oklch(0.94 0.012 84);
-        --primary: oklch(0.72 0.095 62);
-        --primary-foreground: oklch(0.2 0.03 52);
-        --secondary: oklch(0.3 0.018 56);
-        --secondary-foreground: oklch(0.9 0.015 82);
-        --muted: oklch(0.28 0.016 56);
-        --muted-foreground: oklch(0.68 0.022 70);
-        --accent: oklch(0.36 0.05 70);
-        --accent-foreground: oklch(0.92 0.04 84);
-        --destructive: oklch(0.64 0.16 28);
-        --destructive-foreground: oklch(0.97 0.012 88);
-        --border: oklch(0.34 0.018 58);
-        --input: oklch(0.34 0.018 58);
-        --ring: oklch(0.6 0.07 62);
-        --success: oklch(0.68 0.1 150);
-        --success-foreground: oklch(0.18 0.03 150);
-        --warning: oklch(0.78 0.13 74);
-        --warning-foreground: oklch(0.24 0.05 55);
-        --info: oklch(0.68 0.09 230);
-        --info-foreground: oklch(0.18 0.03 230);
-    }
+/* Light is the default whatever the OS says. Dark is opt-in:
+   <html data-theme="dark">. */
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --background: oklch(0.19 0.012 56);
+    --foreground: oklch(0.94 0.012 84);
+    --card: oklch(0.23 0.015 54);
+    --card-foreground: oklch(0.94 0.012 84);
+    --primary: oklch(0.72 0.095 62);
+    --primary-foreground: oklch(0.2 0.03 52);
+    --secondary: oklch(0.3 0.018 56);
+    --secondary-foreground: oklch(0.9 0.015 82);
+    --muted: oklch(0.28 0.016 56);
+    --muted-foreground: oklch(0.68 0.022 70);
+    --accent: oklch(0.36 0.05 70);
+    --accent-foreground: oklch(0.92 0.04 84);
+    --destructive: oklch(0.64 0.16 28);
+    --destructive-foreground: oklch(0.97 0.012 88);
+    --border: oklch(0.34 0.018 58);
+    --input: oklch(0.34 0.018 58);
+    --ring: oklch(0.6 0.07 62);
+    --success: oklch(0.68 0.1 150);
+    --success-foreground: oklch(0.18 0.03 150);
+    --warning: oklch(0.78 0.13 74);
+    --warning-foreground: oklch(0.24 0.05 55);
+    --info: oklch(0.68 0.09 230);
+    --info-foreground: oklch(0.18 0.03 230);
 }
 
 /* Names the page stylesheets were written against, pointed at the brand
@@ -241,13 +241,11 @@ body {
     color: var(--muted-foreground);
 }
 
-@media (prefers-color-scheme: dark) {
-    /* The lockup is only legible on white. */
-    .site-brand img {
-        padding: 4px 8px;
-        border-radius: 6px;
-        background: #fff;
-    }
+/* The lockup is only legible on white. */
+:root[data-theme="dark"] .site-brand img {
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: #fff;
 }
 
 @media (max-width: 720px) {
